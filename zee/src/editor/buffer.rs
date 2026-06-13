@@ -594,8 +594,13 @@ impl Buffer {
         let clipboard_text = parts.join("\n");
         self.context
             .clipboard
-            .set_contents(clipboard_text)
+            .set_contents(clipboard_text.clone())
             .unwrap();
+
+        // Record rectangle kill (D1): store lines and clipboard text for later peek
+        self.context
+            .rectangle_kill_store
+            .record(parts, clipboard_text);
 
         // Deselect after copy
         self.cursors[cursor_id.0].clear_rectangle_selection();
@@ -719,8 +724,13 @@ impl Buffer {
                 let clipboard_text = parts.join("\n");
                 self.context
                     .clipboard
-                    .set_contents(clipboard_text)
+                    .set_contents(clipboard_text.clone())
                     .unwrap();
+
+                // Record rectangle kill (D1): store lines and clipboard text for later peek
+                self.context
+                    .rectangle_kill_store
+                    .record(parts, clipboard_text);
             }
         }
 
