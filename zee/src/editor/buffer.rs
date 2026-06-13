@@ -11,7 +11,7 @@ use zi::ComponentLink;
 
 use zee_edit::{
     graphemes::{strip_trailing_whitespace, RopeExt},
-    movement, tree::EditTree, CompoundDiff, Cursor, Direction, OpaqueDiff,
+    movement, tree::EditTree, CompoundDiff, Cursor, Direction, OpaqueDiff, RectangleSelection,
 };
 use zee_grammar::Mode;
 
@@ -209,6 +209,14 @@ impl Buffer {
         }
     }
 
+    /// Command: update rectangle diagonal after a movement, only when in rectangle mode.
+    #[inline]
+    fn maybe_update_rectangle(content: &EditTree, cursor: &mut Cursor, tab_width: usize) {
+        if cursor.is_rectangle_mode() {
+            cursor.update_rectangle_diagonal(content, tab_width);
+        }
+    }
+
     #[inline]
     pub fn id(&self) -> BufferId {
         self.id
@@ -326,63 +334,43 @@ impl Buffer {
             match message {
                 CursorMessage::Up(n) => {
                     movement::move_vertically(content, cursor, tab_width, Direction::Backward, n);
-                    if cursor.is_rectangle_mode() {
-                        cursor.update_rectangle_diagonal(content, tab_width);
-                    }
+                    Self::maybe_update_rectangle(content, cursor, tab_width);
                 }
                 CursorMessage::Down(n) => {
                     movement::move_vertically(content, cursor, tab_width, Direction::Forward, n);
-                    if cursor.is_rectangle_mode() {
-                        cursor.update_rectangle_diagonal(content, tab_width);
-                    }
+                    Self::maybe_update_rectangle(content, cursor, tab_width);
                 }
                 CursorMessage::Left => {
                     movement::move_horizontally(content, cursor, Direction::Backward, 1);
-                    if cursor.is_rectangle_mode() {
-                        cursor.update_rectangle_diagonal(content, tab_width);
-                    }
+                    Self::maybe_update_rectangle(content, cursor, tab_width);
                 }
                 CursorMessage::Right => {
                     movement::move_horizontally(content, cursor, Direction::Forward, 1);
-                    if cursor.is_rectangle_mode() {
-                        cursor.update_rectangle_diagonal(content, tab_width);
-                    }
+                    Self::maybe_update_rectangle(content, cursor, tab_width);
                 }
                 CursorMessage::StartOfLine => {
                     movement::move_to_start_of_line(content, cursor);
-                    if cursor.is_rectangle_mode() {
-                        cursor.update_rectangle_diagonal(content, tab_width);
-                    }
+                    Self::maybe_update_rectangle(content, cursor, tab_width);
                 }
                 CursorMessage::EndOfLine => {
                     movement::move_to_end_of_line(content, cursor);
-                    if cursor.is_rectangle_mode() {
-                        cursor.update_rectangle_diagonal(content, tab_width);
-                    }
+                    Self::maybe_update_rectangle(content, cursor, tab_width);
                 }
                 CursorMessage::StartOfBuffer => {
                     movement::move_to_start_of_buffer(content, cursor);
-                    if cursor.is_rectangle_mode() {
-                        cursor.update_rectangle_diagonal(content, tab_width);
-                    }
+                    Self::maybe_update_rectangle(content, cursor, tab_width);
                 }
                 CursorMessage::EndOfBuffer => {
                     movement::move_to_end_of_buffer(content, cursor);
-                    if cursor.is_rectangle_mode() {
-                        cursor.update_rectangle_diagonal(content, tab_width);
-                    }
+                    Self::maybe_update_rectangle(content, cursor, tab_width);
                 }
                 CursorMessage::MoveWord(direction, count) => {
                     movement::move_word(content, cursor, direction, count);
-                    if cursor.is_rectangle_mode() {
-                        cursor.update_rectangle_diagonal(content, tab_width);
-                    }
+                    Self::maybe_update_rectangle(content, cursor, tab_width);
                 }
                 CursorMessage::MoveParagraph(direction, count) => {
                     movement::move_paragraph(content, cursor, direction, count);
-                    if cursor.is_rectangle_mode() {
-                        cursor.update_rectangle_diagonal(content, tab_width);
-                    }
+                    Self::maybe_update_rectangle(content, cursor, tab_width);
                 }
 
                 CursorMessage::BeginSelection => cursor.begin_selection(),
@@ -559,52 +547,24 @@ impl Buffer {
         }
 
         let tab_width = self.mode.indentation.tab_width();
-        let mut parts: Vec<String> = Vec::new();
+        let parts = extract_rectangle_lines(&self.content, &rect, tab_width);
+        self.set_clipboard_and_record_kill(parts);
 
-        for line_idx in rect.line_start..=rect.line_end {
-            let line_char_start = self.content.line_to_char(line_idx);
-            let line = self.content.line(line_idx);
-            // Strip trailing newline for column mapping
-            let line_len = line.len_chars();
-            let slice_end = if line_len > 0 && line.char(line_len - 1) == '\n' {
-                line_char_start + line_len - 1
-            } else {
-                line_char_start + line_len
-            };
-            let line_slice = self.content.slice(line_char_start..slice_end);
+        // Deselect after copy
+        self.cursors[cursor_id.0].clear_rectangle_selection();
+        CompoundDiff::empty()
+    }
 
-            let mapping = zee_edit::graphemes::visual_column_range_to_char_range(
-                tab_width,
-                &line_slice,
-                line_char_start,
-                rect.column_left,
-                rect.column_right,
-                zee_edit::graphemes::RaggedLinePolicy::Empty,
-            );
-
-            if mapping.is_empty() {
-                parts.push(String::new());
-            } else {
-                let extracted: String = self.content.slice(mapping.char_range()).into();
-                parts.push(extracted);
-            }
-        }
-
-        // No trailing newline (Emacs copy-rectangle-as-kill convention)
+    /// Command: set clipboard text and record it in the rectangle kill store.
+    fn set_clipboard_and_record_kill(&mut self, parts: Vec<String>) {
         let clipboard_text = parts.join("\n");
         self.context
             .clipboard
             .set_contents(clipboard_text.clone())
             .unwrap();
-
-        // Record rectangle kill (D1): store lines and clipboard text for later peek
         self.context
             .rectangle_kill_store
             .record(parts, clipboard_text);
-
-        // Deselect after copy
-        self.cursors[cursor_id.0].clear_rectangle_selection();
-        CompoundDiff::empty()
     }
 
     /// Rectangle delete: remove text from rectangle region as compound diff.
@@ -620,69 +580,9 @@ impl Buffer {
         }
 
         let tab_width = self.mode.indentation.tab_width();
-        let mut diffs: Vec<OpaqueDiff> = Vec::new();
-
-        // Compute all char ranges first (against original Rope)
-        let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
-        for line_idx in rect.line_start..=rect.line_end {
-            let line_char_start = self.content.line_to_char(line_idx);
-            let line = self.content.line(line_idx);
-            let line_len = line.len_chars();
-            let slice_end = if line_len > 0 && line.char(line_len - 1) == '\n' {
-                line_char_start + line_len - 1
-            } else {
-                line_char_start + line_len
-            };
-            let line_slice = self.content.slice(line_char_start..slice_end);
-
-            let mapping = zee_edit::graphemes::visual_column_range_to_char_range(
-                tab_width,
-                &line_slice,
-                line_char_start,
-                rect.column_left,
-                rect.column_right,
-                zee_edit::graphemes::RaggedLinePolicy::Empty,
-            );
-
-            if !mapping.is_empty() {
-                ranges.push(mapping.char_range());
-            }
-        }
-
-        // Sort ranges in descending char_index order for safe removal
-        ranges.sort_by(|a, b| b.start.cmp(&a.start));
-
-        for range in &ranges {
-            let byte_start = self.content.char_to_byte(range.start);
-            let byte_end = self.content.char_to_byte(range.end);
-            diffs.push(OpaqueDiff::new(
-                byte_start,
-                byte_end - byte_start,
-                0,
-                range.start,
-                range.end - range.start,
-                0,
-            ));
-            self.content.staged_mut().remove(range.clone());
-        }
-
-        // Move cursor to top-left corner (r0, visual column left)
-        let top_line_char_start = self.content.line_to_char(rect.line_start);
-        // Find the char index at visual column `left` on the top line
-        let top_line = self.content.line(rect.line_start);
-        let top_line_len = top_line.len_chars();
-        let top_slice_end = if top_line_len > 0 && top_line.char(top_line_len - 1) == '\n' {
-            top_line_char_start + top_line_len - 1
-        } else {
-            top_line_char_start + top_line_len
-        };
-        let top_line_slice = self.content.slice(top_line_char_start..top_slice_end);
-        let (char_at_left, _) = zee_edit::graphemes::visual_column_to_char_index_pub(
-            tab_width, &top_line_slice, rect.column_left,
-        );
-        let new_cursor_pos = top_line_char_start + char_at_left;
-        let grapheme_end = self.content.next_grapheme_boundary(new_cursor_pos);
-        self.cursors[cursor_id.0] = Cursor::with_range(new_cursor_pos..grapheme_end);
+        let ranges = compute_rectangle_char_ranges(&self.content, &rect, tab_width);
+        let diffs = remove_ranges_and_build_diffs(&mut self.content, &ranges);
+        move_cursor_to_top_left(&self.content, &mut self.cursors[cursor_id.0], &rect, tab_width);
 
         (CompoundDiff(diffs), true)
     }
@@ -695,42 +595,8 @@ impl Buffer {
 
         if let Some(ref r) = rect {
             if !r.is_zero_width() {
-                let mut parts: Vec<String> = Vec::new();
-                for line_idx in r.line_start..=r.line_end {
-                    let line_char_start = self.content.line_to_char(line_idx);
-                    let line = self.content.line(line_idx);
-                    let line_len = line.len_chars();
-                    let slice_end = if line_len > 0 && line.char(line_len - 1) == '\n' {
-                        line_char_start + line_len - 1
-                    } else {
-                        line_char_start + line_len
-                    };
-                    let line_slice = self.content.slice(line_char_start..slice_end);
-                    let mapping = zee_edit::graphemes::visual_column_range_to_char_range(
-                        tab_width,
-                        &line_slice,
-                        line_char_start,
-                        r.column_left,
-                        r.column_right,
-                        zee_edit::graphemes::RaggedLinePolicy::Empty,
-                    );
-                    if mapping.is_empty() {
-                        parts.push(String::new());
-                    } else {
-                        let extracted: String = self.content.slice(mapping.char_range()).into();
-                        parts.push(extracted);
-                    }
-                }
-                let clipboard_text = parts.join("\n");
-                self.context
-                    .clipboard
-                    .set_contents(clipboard_text.clone())
-                    .unwrap();
-
-                // Record rectangle kill (D1): store lines and clipboard text for later peek
-                self.context
-                    .rectangle_kill_store
-                    .record(parts, clipboard_text);
+                let parts = extract_rectangle_lines(&self.content, r, tab_width);
+                self.set_clipboard_and_record_kill(parts);
             }
         }
 
@@ -775,34 +641,31 @@ impl Buffer {
     }
 
     fn update_parse_tree_compound(&mut self, compound: &CompoundDiff, fresh: bool) {
-        if let Some(parser) = self.parser.as_mut() {
-            // For compound diffs with more than one sub-diff, force a fresh
-            // parse since the byte indices in subsequent sub-diffs were
-            // computed against the original text and would be wrong for
-            // incremental tree editing.
-            let needs_fresh = fresh || compound.0.len() > 1;
-            if needs_fresh {
-                parser.tree = None;
-            }
-
-            let task_pool = &self.context.task_pool;
-            let staged_text = self.content.staged().clone();
-            let buffer_id = self.id;
-            let link = self.context.link.clone();
-            let version = self.content.version();
-            // For single-diff case, apply the edit incrementally
-            if !needs_fresh {
-                if let Some(diff) = compound.0.first() {
-                    parser.edit(diff);
-                }
-            }
-            parser.spawn(task_pool, staged_text, needs_fresh, move |status| {
-                link.send(
-                    BuffersMessage::new(buffer_id, BufferMessage::ParseSyntax { version, status })
-                        .into(),
-                )
-            });
+        let parser = match self.parser.as_mut() {
+            Some(p) => p,
+            None => return,
+        };
+        // For compound diffs with more than one sub-diff, force a fresh
+        // parse since the byte indices in subsequent sub-diffs were
+        // computed against the original text and would be wrong for
+        // incremental tree editing.
+        let needs_fresh = fresh || compound.0.len() > 1;
+        if needs_fresh {
+            parser.tree = None;
+        } else if let Some(diff) = compound.0.first() {
+            parser.edit(diff);
         }
+
+        let staged_text = self.content.staged().clone();
+        let buffer_id = self.id;
+        let version = self.content.version();
+        let link = self.context.link.clone();
+        parser.spawn(&self.context.task_pool, staged_text, needs_fresh, move |status| {
+            link.send(
+                BuffersMessage::new(buffer_id, BufferMessage::ParseSyntax { version, status })
+                    .into(),
+            )
+        });
     }
 
     fn spawn_save_file(&mut self) {
@@ -833,6 +696,132 @@ impl Buffer {
             link.send(BuffersMessage::new(buffer_id, buffer_message).into())
         });
     }
+}
+
+// ---------------------------------------------------------------------------
+// Rectangle helpers (kept outside impl Buffer to keep method variable counts
+// within the guideline)
+// ---------------------------------------------------------------------------
+
+/// Query: extract text lines from a rectangle selection.
+fn extract_rectangle_lines(
+    content: &EditTree,
+    rect: &RectangleSelection,
+    tab_width: usize,
+) -> Vec<String> {
+    let mut parts = Vec::new();
+    for line_idx in rect.line_start..=rect.line_end {
+        let line_char_start = content.line_to_char(line_idx);
+        let line = content.line(line_idx);
+        let line_len = line.len_chars();
+        let slice_end = if line_len > 0 && line.char(line_len - 1) == '\n' {
+            line_char_start + line_len - 1
+        } else {
+            line_char_start + line_len
+        };
+        let line_slice = content.slice(line_char_start..slice_end);
+
+        let mapping = zee_edit::graphemes::visual_column_range_to_char_range(
+            tab_width,
+            &line_slice,
+            line_char_start,
+            rect.column_left,
+            rect.column_right,
+            zee_edit::graphemes::RaggedLinePolicy::Empty,
+        );
+
+        if mapping.is_empty() {
+            parts.push(String::new());
+        } else {
+            let extracted: String = content.slice(mapping.char_range()).into();
+            parts.push(extracted);
+        }
+    }
+    parts
+}
+
+/// Query: compute char ranges for each line in a rectangle selection.
+/// Ranges are returned sorted in descending char_index order for safe removal.
+fn compute_rectangle_char_ranges(
+    content: &EditTree,
+    rect: &RectangleSelection,
+    tab_width: usize,
+) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = Vec::new();
+    for line_idx in rect.line_start..=rect.line_end {
+        let line_char_start = content.line_to_char(line_idx);
+        let line = content.line(line_idx);
+        let line_len = line.len_chars();
+        let slice_end = if line_len > 0 && line.char(line_len - 1) == '\n' {
+            line_char_start + line_len - 1
+        } else {
+            line_char_start + line_len
+        };
+        let line_slice = content.slice(line_char_start..slice_end);
+
+        let mapping = zee_edit::graphemes::visual_column_range_to_char_range(
+            tab_width,
+            &line_slice,
+            line_char_start,
+            rect.column_left,
+            rect.column_right,
+            zee_edit::graphemes::RaggedLinePolicy::Empty,
+        );
+
+        if !mapping.is_empty() {
+            ranges.push(mapping.char_range());
+        }
+    }
+    // Sort ranges in descending char_index order for safe removal
+    ranges.sort_by(|a, b| b.start.cmp(&a.start));
+    ranges
+}
+
+/// Command: remove the given char ranges from staged text and build OpaqueDiffs.
+/// Ranges must be sorted in descending order.
+fn remove_ranges_and_build_diffs(
+    content: &mut EditTree,
+    ranges: &[std::ops::Range<usize>],
+) -> Vec<OpaqueDiff> {
+    let mut diffs = Vec::new();
+    for range in ranges {
+        let byte_start = content.char_to_byte(range.start);
+        let byte_end = content.char_to_byte(range.end);
+        diffs.push(OpaqueDiff::new(
+            byte_start,
+            byte_end - byte_start,
+            0,
+            range.start,
+            range.end - range.start,
+            0,
+        ));
+        content.staged_mut().remove(range.clone());
+    }
+    diffs
+}
+
+/// Command: move cursor to the top-left corner of a rectangle selection.
+fn move_cursor_to_top_left(
+    content: &EditTree,
+    cursor: &mut Cursor,
+    rect: &RectangleSelection,
+    tab_width: usize,
+) {
+    let top_line_char_start = content.line_to_char(rect.line_start);
+    let top_line = content.line(rect.line_start);
+    let top_line_len = top_line.len_chars();
+    let top_slice_end = if top_line_len > 0 && top_line.char(top_line_len - 1) == '\n' {
+        top_line_char_start + top_line_len - 1
+    } else {
+        top_line_char_start + top_line_len
+    };
+    let top_line_slice = content.slice(top_line_char_start..top_slice_end);
+    let (char_at_left, _) = zee_edit::graphemes::visual_column_to_char_index_pub(
+        tab_width, &top_line_slice, rect.column_left,
+    );
+    let new_cursor_pos = top_line_char_start + char_at_left;
+    let grapheme_end = content.next_grapheme_boundary(new_cursor_pos);
+    *cursor = Cursor::with_range(new_cursor_pos..grapheme_end);
 }
 
 #[derive(Clone, PartialEq)]

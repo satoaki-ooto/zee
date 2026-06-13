@@ -1,6 +1,6 @@
 use zi::terminal::{Background, Style};
 
-use zee_edit::{CharIndex, Cursor, LineIndex};
+use zee_edit::{CharIndex, Cursor};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Theme {
@@ -25,6 +25,21 @@ pub struct Theme {
     pub code_variant: Style,
 }
 
+/// Per-grapheme rectangle highlight state.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RectangleHighlight {
+    pub visual_range: Option<(usize, usize)>,
+    pub visual_x: usize,
+    pub is_zero_width: Option<bool>,
+}
+
+/// Display flags that affect cursor / selection / current-line rendering.
+#[derive(Clone, Copy, Debug)]
+pub struct RenderFlags {
+    pub focused: bool,
+    pub line_under_cursor: bool,
+}
+
 #[allow(dead_code)]
 #[inline]
 pub fn text_style_at_char(
@@ -36,29 +51,27 @@ pub fn text_style_at_char(
     scope: &str,
     is_error: bool,
 ) -> Style {
-    text_style_at_char_ex(
-        theme, cursor, char_index, focused, line_under_cursor, scope, is_error,
-        None, 0, None,
-    )
+    let flags = RenderFlags {
+        focused,
+        line_under_cursor,
+    };
+    let rect = RectangleHighlight::default();
+    text_style_at_char_ex(theme, cursor, char_index, flags, scope, is_error, &rect)
 }
 
 /// Extended version with rectangle highlight support.
-/// `visual_x_range`: if Some((left, right)), this grapheme's visual column range
-///   overlaps [left, right) for rectangle highlight.
-/// `line_index`: current line index for rectangle line range check.
-/// `is_zero_width_rect`: whether the rectangle is zero-width (draw thin line).
+///
+/// Parameter count is kept at 7 ( guideline ) by grouping related fields into
+/// `RenderFlags` and `RectangleHighlight`.
 #[inline]
 pub fn text_style_at_char_ex(
     theme: &Theme,
     cursor: &Cursor,
     char_index: CharIndex,
-    focused: bool,
-    line_under_cursor: bool,
+    flags: RenderFlags,
     scope: &str,
     is_error: bool,
-    rect_visual_range: Option<(usize, usize)>,
-    visual_x: usize,
-    is_zero_width_rect: Option<bool>,
+    rect: &RectangleHighlight,
 ) -> Style {
     let starts = |pattern| scope.starts_with(pattern);
 
@@ -103,7 +116,7 @@ pub fn text_style_at_char_ex(
     };
 
     if char_index == cursor.range().start || cursor.range().contains(&char_index) {
-        let cursor_style = if focused {
+        let cursor_style = if flags.focused {
             theme.cursor_focused
         } else {
             theme.cursor_unfocused
@@ -114,42 +127,12 @@ pub fn text_style_at_char_ex(
             bold: style.bold,
             underline: style.underline,
         }
-    } else if let Some((left, right)) = rect_visual_range {
-        // Rectangle highlight mode
-        if left < right && visual_x >= left && visual_x < right {
-            Style {
-                background: theme.selection_background,
-                foreground: style.foreground,
-                bold: style.bold,
-                underline: style.underline,
-            }
-        } else if is_zero_width_rect == Some(true) && visual_x == left {
-            // Zero-width rectangle: draw thin vertical line at column
-            let cursor_style = if focused {
-                theme.cursor_focused
-            } else {
-                theme.cursor_unfocused
-            };
-            Style {
-                background: cursor_style.background,
-                foreground: style.foreground,
-                bold: style.bold,
-                underline: style.underline,
-            }
-        } else if line_under_cursor && focused {
-            Style {
-                background: theme.text_current_line.background,
-                foreground: style.foreground,
-                bold: style.bold,
-                underline: style.underline,
-            }
-        } else {
-            style
-        }
+    } else if let Some(rect_style) = rectangle_style_for(theme, style, rect, flags) {
+        rect_style
     } else {
         let background = if cursor.selection().contains(&char_index) {
             theme.selection_background
-        } else if line_under_cursor && focused {
+        } else if flags.line_under_cursor && flags.focused {
             theme.text_current_line.background
         } else {
             theme.text.background
@@ -160,5 +143,47 @@ pub fn text_style_at_char_ex(
             bold: style.bold,
             underline: style.underline,
         }
+    }
+}
+
+/// Query: compute the style for a grapheme when rectangle highlight is active.
+/// Returns `None` when rectangle highlight does not apply.
+#[inline]
+fn rectangle_style_for(
+    theme: &Theme,
+    base_style: Style,
+    rect: &RectangleHighlight,
+    flags: RenderFlags,
+) -> Option<Style> {
+    let (left, right) = rect.visual_range?;
+    if left < right && rect.visual_x >= left && rect.visual_x < right {
+        Some(Style {
+            background: theme.selection_background,
+            foreground: base_style.foreground,
+            bold: base_style.bold,
+            underline: base_style.underline,
+        })
+    } else if rect.is_zero_width == Some(true) && rect.visual_x == left {
+        // Zero-width rectangle: draw thin vertical line at column
+        let cursor_style = if flags.focused {
+            theme.cursor_focused
+        } else {
+            theme.cursor_unfocused
+        };
+        Some(Style {
+            background: cursor_style.background,
+            foreground: base_style.foreground,
+            bold: base_style.bold,
+            underline: base_style.underline,
+        })
+    } else if flags.line_under_cursor && flags.focused {
+        Some(Style {
+            background: theme.text_current_line.background,
+            foreground: base_style.foreground,
+            bold: base_style.bold,
+            underline: base_style.underline,
+        })
+    } else {
+        None
     }
 }
