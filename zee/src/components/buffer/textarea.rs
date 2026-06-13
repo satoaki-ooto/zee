@@ -3,15 +3,15 @@ use ropey::{Rope, RopeSlice};
 use std::{iter, ops::Range};
 use tree_sitter::{Node, Query, QueryCursor, TextProvider};
 use zi::{
-    terminal::GraphemeCluster, Canvas, Component, ComponentLink, Layout, Position, Rect,
-    ShouldRender, Size,
+    Canvas, Component, ComponentLink, Layout, Position, Rect, ShouldRender, Size,
+    terminal::GraphemeCluster,
 };
 
 use zee_edit::{ByteIndex, Cursor, LineIndex, RopeGraphemes};
 use zee_grammar::Mode;
 
 use crate::syntax::{
-    highlight::{text_style_at_char_ex, RectangleHighlight, RenderFlags, Theme as SyntaxTheme},
+    highlight::{RectangleHighlight, RenderFlags, Theme as SyntaxTheme, text_style_at_char_ex},
     parse::ParseTree,
 };
 
@@ -167,15 +167,14 @@ impl TextArea {
         let line_start_byte = text.char_to_byte(char_index);
 
         // Determine rectangle highlight state for this line
-        let rect_state: Option<(usize, usize, bool)> = cursor.rectangle_selection().and_then(
-            |rect| {
+        let rect_state: Option<(usize, usize, bool)> =
+            cursor.rectangle_selection().and_then(|rect| {
                 if line_index >= rect.line_start && line_index <= rect.line_end {
                     Some((rect.column_left, rect.column_right, rect.is_zero_width()))
                 } else {
                     None
                 }
-            },
-        );
+            });
         let rect = RectangleHighlight {
             visual_range: rect_state.map(|(l, r, _)| (l, r)),
             visual_x,
@@ -190,15 +189,8 @@ impl TextArea {
             let is_error = false;
 
             let scope = get_scope(line_start_byte + grapheme.byte_start).unwrap_or("");
-            let style = text_style_at_char_ex(
-                theme,
-                cursor,
-                char_index,
-                flags,
-                scope,
-                is_error,
-                &rect,
-            );
+            let style =
+                text_style_at_char_ex(theme, cursor, char_index, flags, scope, is_error, &rect);
             let grapheme_width =
                 zee_edit::graphemes::width(self.properties.mode.indentation.tab_width(), &grapheme);
             let horizontal_bounds_inclusive = frame.min_x()..=frame.max_x();

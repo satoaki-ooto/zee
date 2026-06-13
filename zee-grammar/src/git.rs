@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use std::{path::Path, process::Command};
 
 pub fn get_revision(current_dir: impl AsRef<Path>) -> Option<String> {

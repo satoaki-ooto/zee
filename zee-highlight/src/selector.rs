@@ -1,5 +1,6 @@
 use fnv::FnvHashMap;
 use nom::{
+    IResult,
     branch::alt,
     bytes::complete::{escaped, is_not, tag, take_while1},
     character::complete::{char, digit1, multispace0, one_of},
@@ -7,7 +8,6 @@ use nom::{
     error::context,
     multi::separated_list,
     sequence::{delimited, preceded},
-    IResult,
 };
 use serde_derive::{Deserialize, Serialize};
 use smallvec::SmallVec;

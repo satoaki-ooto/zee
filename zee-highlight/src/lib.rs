@@ -8,7 +8,7 @@ use std::{cmp, collections::HashMap, convert::TryFrom};
 use error::Result;
 use tree_sitter::Language;
 
-use crate::selector::{map_node_kind_names, Selector};
+use crate::selector::{Selector, map_node_kind_names};
 
 pub use crate::selector::SelectorNodeId;
 
@@ -225,16 +225,10 @@ impl PartialEq for Regex {
 impl ScopePattern {
     fn matches(&self, content: &str) -> Option<&Scope> {
         match self {
-            ScopePattern::All(ref scopes) => Some(scopes),
-            ScopePattern::Exact {
-                ref exact,
-                ref scopes,
-            } if exact.as_str() == content => Some(scopes),
-            ScopePattern::Regex {
-                ref regex,
-                ref scopes,
-            } if regex.is_match(content) => Some(scopes),
-            ScopePattern::Vec(ref scope_patterns) => {
+            ScopePattern::All(scopes) => Some(scopes),
+            ScopePattern::Exact { exact, scopes } if exact.as_str() == content => Some(scopes),
+            ScopePattern::Regex { regex, scopes } if regex.is_match(content) => Some(scopes),
+            ScopePattern::Vec(scope_patterns) => {
                 for scope_pattern in scope_patterns.iter() {
                     let maybe_scope = scope_pattern.matches(content);
                     if maybe_scope.is_some() {

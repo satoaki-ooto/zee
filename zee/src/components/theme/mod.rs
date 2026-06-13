@@ -4,7 +4,7 @@ pub use self::base16::Base16Theme;
 use zi::terminal::{Colour, Style};
 
 use super::{
-    buffer::{status_bar::Theme as StatusBarTheme, Theme as BufferTheme},
+    buffer::{Theme as BufferTheme, status_bar::Theme as StatusBarTheme},
     edit_tree_viewer::Theme as EditTreeViewerTheme,
     prompt::Theme as PromptTheme,
     splash::Theme as SplashTheme,

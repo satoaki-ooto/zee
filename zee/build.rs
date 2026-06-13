@@ -1,5 +1,5 @@
 use anyhow::Result;
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
 use serde_derive::Deserialize;
 use std::fs::File;
 use zee_grammar::config::ModeConfig;

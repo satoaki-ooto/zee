@@ -23,18 +23,18 @@ use zee_grammar::Mode;
 
 use crate::{
     clipboard::Clipboard,
-    rectangle_kill::RectangleKillStore,
     components::{
         buffer::{Buffer as BufferView, Properties as BufferViewProperties},
         prompt::{
-            buffers::BufferEntry, picker::FileSource, Action as PromptAction, Prompt,
-            Properties as PromptProperties, PROMPT_INACTIVE_HEIGHT,
+            Action as PromptAction, PROMPT_INACTIVE_HEIGHT, Prompt, Properties as PromptProperties,
+            buffers::BufferEntry, picker::FileSource,
         },
         splash::{Properties as SplashProperties, Splash},
-        theme::{Theme, THEMES},
+        theme::{THEMES, Theme},
     },
     config::{EditorConfig, PLAIN_TEXT_MODE},
     error::Result,
+    rectangle_kill::RectangleKillStore,
     task::TaskPool,
 };
 

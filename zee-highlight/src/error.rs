@@ -23,12 +23,12 @@ impl Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::SelectorSyntax => write!(formatter, "Invalid selector syntax."),
-            Self::NodeKindNotFound(ref node_kind) => write!(
+            Self::NodeKindNotFound(node_kind) => write!(
                 formatter,
                 "Node kind `{}` does not exist in the supplied language.",
                 node_kind
             ),
-            Self::RegexSyntax(ref error) => write!(formatter, "Invalid regex syntax: {}", error),
+            Self::RegexSyntax(error) => write!(formatter, "Invalid regex syntax: {}", error),
         }
     }
 }

@@ -62,7 +62,12 @@ impl<IdT: Clone + Copy + Display> WindowTree<IdT> {
         let mut node_index = 0;
         while node_index < self.nodes.len() {
             match self.nodes[node_index..] {
-                [Node::ContainerStart(_), window @ Node::Window(_), Node::ContainerEnd, ..] => {
+                [
+                    Node::ContainerStart(_),
+                    window @ Node::Window(_),
+                    Node::ContainerEnd,
+                    ..,
+                ] => {
                     self.nodes
                         .splice(node_index..node_index + 3, std::iter::once(window));
                 }
