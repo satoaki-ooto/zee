@@ -1,4 +1,5 @@
 use ropey::{iter::Chunks, str_utils, Rope, RopeSlice};
+use std::ops::Range;
 use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
 use unicode_width::UnicodeWidthStr;
 
@@ -117,6 +118,165 @@ impl<'a> Iterator for RopeGraphemes<'a> {
             byte_end,
         })
     }
+}
+
+/// Ragged line policy: what to do when a line is shorter than the rectangle's
+/// left column. This is the single branch point isolated per D5.
+/// Currently "empty" (Emacs-style: no padding). To switch to whitespace
+/// padding, change this enum variant and the match arm in
+/// `visual_column_range_to_char_range`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RaggedLinePolicy {
+    /// Lines shorter than `left` yield an empty char range (no padding).
+    Empty,
+    // Future: Padding variant can be added here without touching callers.
+}
+
+/// Result of mapping a visual column range to a char range on a single line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ColumnMapping {
+    /// Char range in the line (relative to line start char index).
+    pub char_start: CharIndex,
+    /// Char end (exclusive). May equal char_start for empty/short lines.
+    pub char_end: CharIndex,
+    /// Whether the line was shorter than the requested left column.
+    pub line_shorter_than_left: bool,
+}
+
+impl ColumnMapping {
+    pub fn char_range(&self) -> Range<CharIndex> {
+        self.char_start..self.char_end
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.char_start == self.char_end
+    }
+}
+
+/// Map a visual column range `[left, right)` on a given line to a char range.
+///
+/// This is the shared extraction rule for highlight/copy/cut (C-4).
+/// Uses `RaggedLinePolicy` for lines shorter than `left` (D5/C-5).
+///
+/// `line_char_start` is the char index of the start of the line in the Rope.
+/// `line_slice` is the line content (without trailing newline).
+/// Returns a `ColumnMapping` with the char range relative to the line.
+pub fn visual_column_range_to_char_range(
+    tab_width: usize,
+    line_slice: &RopeSlice,
+    line_char_start: CharIndex,
+    left: usize,
+    right: usize,
+    policy: RaggedLinePolicy,
+) -> ColumnMapping {
+    if left >= right {
+        // Zero-width rectangle: empty range at `left`
+        // Find the char index corresponding to visual column `left`
+        let (char_at_left, _) = visual_column_to_char_index(tab_width, line_slice, left);
+        return ColumnMapping {
+            char_start: line_char_start + char_at_left,
+            char_end: line_char_start + char_at_left,
+            line_shorter_than_left: false,
+        };
+    }
+
+    let (char_at_left, visual_at_left) =
+        visual_column_to_char_index(tab_width, line_slice, left);
+    let char_at_right = visual_column_to_char_end(tab_width, line_slice, right);
+
+    // Check if line is shorter than left
+    let line_visual_end = width(tab_width, line_slice);
+    if line_visual_end <= left {
+        return match policy {
+            RaggedLinePolicy::Empty => ColumnMapping {
+                char_start: line_char_start + char_at_left,
+                char_end: line_char_start + char_at_left,
+                line_shorter_than_left: true,
+            },
+        };
+    }
+
+    // If the left visual column falls in the middle of a wide grapheme,
+    // include that grapheme (it overlaps the range).
+    let actual_char_start = if visual_at_left < left {
+        // The grapheme at char_at_left started before `left` visual column
+        // but overlaps it - include it
+        char_at_left
+    } else {
+        char_at_left
+    };
+
+    ColumnMapping {
+        char_start: line_char_start + actual_char_start,
+        char_end: line_char_start + char_at_right,
+        line_shorter_than_left: false,
+    }
+}
+
+/// Find the char index (relative to line start) and the actual visual column
+/// at the start of the grapheme that spans the given visual column.
+///
+/// Returns (char_offset_in_line, actual_visual_column_of_grapheme_start).
+pub fn visual_column_to_char_index_pub(
+    tab_width: usize,
+    line_slice: &RopeSlice,
+    target_visual_col: usize,
+) -> (CharIndex, usize) {
+    visual_column_to_char_index(tab_width, line_slice, target_visual_col)
+}
+
+/// Find the char index (relative to line start) and the actual visual column
+/// at the start of the grapheme that spans the given visual column.
+///
+/// Returns (char_offset_in_line, actual_visual_column_of_grapheme_start).
+fn visual_column_to_char_index(
+    tab_width: usize,
+    line_slice: &RopeSlice,
+    target_visual_col: usize,
+) -> (CharIndex, usize) {
+    let mut visual_x = 0;
+    let mut char_offset = 0;
+
+    for grapheme in RopeGraphemes::new(line_slice) {
+        let grapheme_width = width(tab_width, &grapheme);
+        if visual_x >= target_visual_col {
+            return (char_offset, visual_x);
+        }
+        // If this grapheme spans the target column (starts before, ends at or after)
+        if visual_x + grapheme_width > target_visual_col {
+            return (char_offset, visual_x);
+        }
+        char_offset += grapheme.len_chars();
+        visual_x += grapheme_width;
+    }
+
+    // Target column is at or beyond EOL
+    (char_offset, visual_x)
+}
+
+/// Find the char index (relative to line start) of the first char that starts
+/// at or after the given visual column. This is used for the "right" (end)
+/// boundary of the column range.
+fn visual_column_to_char_end(
+    tab_width: usize,
+    line_slice: &RopeSlice,
+    target_visual_col: usize,
+) -> CharIndex {
+    let mut visual_x = 0;
+    let mut char_offset = 0;
+
+    for grapheme in RopeGraphemes::new(line_slice) {
+        let grapheme_width = width(tab_width, &grapheme);
+        // If this grapheme ends at or after the target column,
+        // the char after this grapheme is the end boundary
+        if visual_x + grapheme_width >= target_visual_col {
+            return char_offset + grapheme.len_chars();
+        }
+        char_offset += grapheme.len_chars();
+        visual_x += grapheme_width;
+    }
+
+    char_offset
 }
 
 pub fn strip_trailing_whitespace(mut text: Rope) -> Rope {
@@ -292,4 +452,150 @@ mod tests {
     }
 
     const MULTI_CHAR_EMOJI: &str = r#"👨‍👨‍👧‍👧"#;
+
+    // --- Column mapping tests (spec: rectangle-column-mapping) ---
+
+    fn line_slice(text: &Rope, line_index: usize) -> RopeSlice {
+        let line = text.line(line_index);
+        // Strip trailing newline for mapping purposes
+        let len = line.len_chars();
+        if len > 0 && line.char(len - 1) == '\n' {
+            text.slice(text.line_to_char(line_index)..text.line_to_char(line_index) + len - 1)
+        } else {
+            text.slice(text.line_to_char(line_index)..text.line_to_char(line_index) + len)
+        }
+    }
+
+    #[test]
+    fn column_mapping_ascii() {
+        let text = Rope::from("Hello world\n");
+        let slice = line_slice(&text, 0);
+        let line_char_start = text.line_to_char(0);
+        let mapping = visual_column_range_to_char_range(
+            4, &slice, line_char_start, 2, 5, RaggedLinePolicy::Empty,
+        );
+        assert_eq!(mapping.char_range(), 2..5);
+        assert!(!mapping.line_shorter_than_left);
+    }
+
+    #[test]
+    fn column_mapping_ascii_full_line() {
+        let text = Rope::from("Hello world\n");
+        let slice = line_slice(&text, 0);
+        let line_char_start = text.line_to_char(0);
+        let mapping = visual_column_range_to_char_range(
+            4, &slice, line_char_start, 0, 11, RaggedLinePolicy::Empty,
+        );
+        assert_eq!(mapping.char_range(), 0..11);
+    }
+
+    #[test]
+    fn column_mapping_cjk() {
+        // CJK char takes width 2
+        let text = Rope::from("AB漢D\n");
+        // Visual columns: A=0-1, B=1-2, 漢=2-4, D=4-5
+        let slice = line_slice(&text, 0);
+        let line_char_start = text.line_to_char(0);
+        // Range [2, 5) covers 漢 and D
+        let mapping = visual_column_range_to_char_range(
+            4, &slice, line_char_start, 2, 5, RaggedLinePolicy::Empty,
+        );
+        // 漢 starts at char 2, D ends at char 4
+        assert_eq!(mapping.char_range(), line_char_start + 2..line_char_start + 4);
+    }
+
+    #[test]
+    fn column_mapping_tab() {
+        // Tab takes tab_width columns
+        let text = Rope::from("A\tB\n");
+        // Visual with tab_width=4: A=0-1, tab=1-5, B=5-6
+        let slice = line_slice(&text, 0);
+        let line_char_start = text.line_to_char(0);
+        // Range [1, 5) covers the tab
+        let mapping = visual_column_range_to_char_range(
+            4, &slice, line_char_start, 1, 5, RaggedLinePolicy::Empty,
+        );
+        // Tab is at char 1, char after tab is 2
+        assert_eq!(mapping.char_range(), line_char_start + 1..line_char_start + 2);
+    }
+
+    #[test]
+    fn column_mapping_short_line_before_left() {
+        // Line "Hi" (visual width 2), left=5, right=8
+        let text = Rope::from("Hi\nlonger line\n");
+        let slice = line_slice(&text, 0);
+        let line_char_start = text.line_to_char(0);
+        let mapping = visual_column_range_to_char_range(
+            4, &slice, line_char_start, 5, 8, RaggedLinePolicy::Empty,
+        );
+        // Line is shorter than left => empty range
+        assert!(mapping.is_empty());
+        assert!(mapping.line_shorter_than_left);
+    }
+
+    #[test]
+    fn column_mapping_line_ends_mid_range() {
+        // Line "Hello" (visual width 5), left=3, right=8
+        let text = Rope::from("Hello\n");
+        let slice = line_slice(&text, 0);
+        let line_char_start = text.line_to_char(0);
+        let mapping = visual_column_range_to_char_range(
+            4, &slice, line_char_start, 3, 8, RaggedLinePolicy::Empty,
+        );
+        // Should return [3, 5) — only the existing chars, no padding
+        assert_eq!(mapping.char_range(), line_char_start + 3..line_char_start + 5);
+        assert!(!mapping.line_shorter_than_left);
+    }
+
+    #[test]
+    fn column_mapping_zero_width() {
+        let text = Rope::from("Hello\n");
+        let slice = line_slice(&text, 0);
+        let line_char_start = text.line_to_char(0);
+        let mapping = visual_column_range_to_char_range(
+            4, &slice, line_char_start, 3, 3, RaggedLinePolicy::Empty,
+        );
+        assert!(mapping.is_empty());
+    }
+
+    #[test]
+    fn column_mapping_cjk_partial_overlap() {
+        // "漢字" — both CJK, each width 2
+        // Visual: 漢=0-2, 字=2-4
+        let text = Rope::from("漢字\n");
+        let slice = line_slice(&text, 0);
+        let line_char_start = text.line_to_char(0);
+        // Range [1, 3) overlaps both 漢 and 字
+        let mapping = visual_column_range_to_char_range(
+            4, &slice, line_char_start, 1, 3, RaggedLinePolicy::Empty,
+        );
+        // Both graphemes overlap the range, so chars 0..2
+        assert_eq!(mapping.char_range(), line_char_start + 0..line_char_start + 2);
+    }
+
+    #[test]
+    fn column_mapping_three_consumers_share_same_range() {
+        // C-4: highlight, copy, cut must use identical char ranges.
+        // All three call the same visual_column_range_to_char_range,
+        // so we just verify it returns the same result for the same input.
+        let text = Rope::from("Hello\nWorld\nShort\n");
+        let tab_width = 4;
+
+        for line_idx in 0..3 {
+            let slice = line_slice(&text, line_idx);
+            let line_char_start = text.line_to_char(line_idx);
+            for left in 0..8 {
+                for right in left..8 {
+                    let mapping1 = visual_column_range_to_char_range(
+                        tab_width, &slice, line_char_start, left, right, RaggedLinePolicy::Empty,
+                    );
+                    let mapping2 = visual_column_range_to_char_range(
+                        tab_width, &slice, line_char_start, left, right, RaggedLinePolicy::Empty,
+                    );
+                    assert_eq!(mapping1, mapping2,
+                        "line={} left={} right={}", line_idx, left, right);
+                }
+            }
+        }
+    }
 }

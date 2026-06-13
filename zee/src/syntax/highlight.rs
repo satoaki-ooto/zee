@@ -1,6 +1,6 @@
 use zi::terminal::{Background, Style};
 
-use zee_edit::{CharIndex, Cursor};
+use zee_edit::{CharIndex, Cursor, LineIndex};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Theme {
@@ -25,6 +25,7 @@ pub struct Theme {
     pub code_variant: Style,
 }
 
+#[allow(dead_code)]
 #[inline]
 pub fn text_style_at_char(
     theme: &Theme,
@@ -34,6 +35,30 @@ pub fn text_style_at_char(
     line_under_cursor: bool,
     scope: &str,
     is_error: bool,
+) -> Style {
+    text_style_at_char_ex(
+        theme, cursor, char_index, focused, line_under_cursor, scope, is_error,
+        None, 0, None,
+    )
+}
+
+/// Extended version with rectangle highlight support.
+/// `visual_x_range`: if Some((left, right)), this grapheme's visual column range
+///   overlaps [left, right) for rectangle highlight.
+/// `line_index`: current line index for rectangle line range check.
+/// `is_zero_width_rect`: whether the rectangle is zero-width (draw thin line).
+#[inline]
+pub fn text_style_at_char_ex(
+    theme: &Theme,
+    cursor: &Cursor,
+    char_index: CharIndex,
+    focused: bool,
+    line_under_cursor: bool,
+    scope: &str,
+    is_error: bool,
+    rect_visual_range: Option<(usize, usize)>,
+    visual_x: usize,
+    is_zero_width_rect: Option<bool>,
 ) -> Style {
     let starts = |pattern| scope.starts_with(pattern);
 
@@ -88,6 +113,38 @@ pub fn text_style_at_char(
             foreground: cursor_style.foreground,
             bold: style.bold,
             underline: style.underline,
+        }
+    } else if let Some((left, right)) = rect_visual_range {
+        // Rectangle highlight mode
+        if left < right && visual_x >= left && visual_x < right {
+            Style {
+                background: theme.selection_background,
+                foreground: style.foreground,
+                bold: style.bold,
+                underline: style.underline,
+            }
+        } else if is_zero_width_rect == Some(true) && visual_x == left {
+            // Zero-width rectangle: draw thin vertical line at column
+            let cursor_style = if focused {
+                theme.cursor_focused
+            } else {
+                theme.cursor_unfocused
+            };
+            Style {
+                background: cursor_style.background,
+                foreground: style.foreground,
+                bold: style.bold,
+                underline: style.underline,
+            }
+        } else if line_under_cursor && focused {
+            Style {
+                background: theme.text_current_line.background,
+                foreground: style.foreground,
+                bold: style.bold,
+                underline: style.underline,
+            }
+        } else {
+            style
         }
     } else {
         let background = if cursor.selection().contains(&char_index) {

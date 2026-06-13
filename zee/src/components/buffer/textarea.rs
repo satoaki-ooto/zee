@@ -7,11 +7,11 @@ use zi::{
     ShouldRender, Size,
 };
 
-use zee_edit::{ByteIndex, Cursor, LineIndex, RopeGraphemes};
+use zee_edit::{ByteIndex, Cursor, LineIndex, RectangleSelection, RopeGraphemes};
 use zee_grammar::Mode;
 
 use crate::syntax::{
-    highlight::{text_style_at_char, Theme as SyntaxTheme},
+    highlight::{text_style_at_char_ex, Theme as SyntaxTheme},
     parse::ParseTree,
 };
 
@@ -166,11 +166,24 @@ impl TextArea {
         let mut char_index = text.line_to_char(line_index);
         let line_start_byte = text.char_to_byte(char_index);
 
+        // Determine rectangle highlight state for this line
+        let rect_state: Option<(usize, usize, bool)> = cursor.rectangle_selection().and_then(
+            |rect| {
+                if line_index >= rect.line_start && line_index <= rect.line_end {
+                    Some((rect.column_left, rect.column_right, rect.is_zero_width()))
+                } else {
+                    None
+                }
+            },
+        );
+        let rect_visual_range = rect_state.map(|(l, r, _)| (l, r));
+        let is_zero_width_rect = rect_state.map(|(_, _, zw)| zw);
+
         for grapheme in RopeGraphemes::new(&line.slice(..)) {
             let is_error = false;
 
             let scope = get_scope(line_start_byte + grapheme.byte_start).unwrap_or("");
-            let style = text_style_at_char(
+            let style = text_style_at_char_ex(
                 theme,
                 cursor,
                 char_index,
@@ -178,6 +191,9 @@ impl TextArea {
                 line_under_cursor,
                 scope,
                 is_error,
+                rect_visual_range,
+                visual_x,
+                is_zero_width_rect,
             );
             let grapheme_width =
                 zee_edit::graphemes::width(self.properties.mode.indentation.tab_width(), &grapheme);

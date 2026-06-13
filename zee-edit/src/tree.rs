@@ -3,7 +3,7 @@ use ropey::Rope;
 use smallvec::SmallVec;
 use std::ops::{Deref, DerefMut};
 
-use crate::{movement, Cursor, OpaqueDiff};
+use crate::{movement, CompoundDiff, Cursor, OpaqueDiff};
 
 #[derive(Debug, Clone)]
 pub struct Revision {
@@ -31,7 +31,7 @@ impl Revision {
 #[derive(Debug, Clone)]
 pub struct Reference {
     pub index: usize,
-    diff: OpaqueDiff,
+    diff: CompoundDiff,
 }
 
 #[derive(Debug, Clone)]
@@ -66,11 +66,15 @@ impl EditTree {
         }
     }
 
+    /// Create a revision from a single OpaqueDiff (backward compat convenience).
     pub fn create_revision(&mut self, diff: OpaqueDiff, cursor: Cursor) {
+        self.create_compound_revision(CompoundDiff::single(diff), cursor)
+    }
+
+    /// Create a revision from a compound diff (multiple sub-diffs).
+    pub fn create_compound_revision(&mut self, diff: CompoundDiff, cursor: Cursor) {
         let parent_to_child_diff = diff;
         let child_to_parent_diff = parent_to_child_diff.reverse();
-        // let child_to_parent_diff = diff;
-        // let parent_to_child_diff = child_to_parent_diff.reverse();
         let new_revision_index = self.revisions.len();
 
         self.revisions.push(Revision {
@@ -95,7 +99,7 @@ impl EditTree {
         self.has_staged_changes = false;
     }
 
-    pub fn undo(&mut self) -> Option<(OpaqueDiff, Cursor)> {
+    pub fn undo(&mut self) -> Option<(CompoundDiff, Cursor)> {
         if let Some(Reference {
             ref diff,
             index: previous_index,
@@ -112,7 +116,7 @@ impl EditTree {
         }
     }
 
-    pub fn redo(&mut self) -> Option<(OpaqueDiff, Cursor)> {
+    pub fn redo(&mut self) -> Option<(CompoundDiff, Cursor)> {
         let Self {
             revisions,
             head_index,
@@ -283,4 +287,170 @@ mod tests {
 
     #[test]
     fn render_undo_tree() {}
+
+    // --- Undo/Redo regression tests (C-3 baseline) ---
+
+    #[test]
+    fn single_edit_undo_restores_exact_text() {
+        let mut tree = EditTree::new(Rope::from("abc"));
+        tree.insert(3, "def");
+        tree.create_revision(
+            OpaqueDiff::new(3, 0, 3, 3, 0, 3),
+            Cursor::end_of_buffer(&tree),
+        );
+        assert_eq!("abcdef", &tree.to_string());
+        let (compound, cursor) = tree.undo().unwrap();
+        assert_eq!("abc", &tree.to_string());
+        let diff = &compound.0[0];
+        assert_eq!(diff.char_index, 3);
+        assert_eq!(diff.old_char_length, 3); // reverse: old=new of forward
+    }
+
+    #[test]
+    fn single_edit_redo_restores_exact_text() {
+        let mut tree = EditTree::new(Rope::from("abc"));
+        tree.insert(3, "def");
+        tree.create_revision(
+            OpaqueDiff::new(3, 0, 3, 3, 0, 3),
+            Cursor::end_of_buffer(&tree),
+        );
+        tree.undo();
+        let (compound, _) = tree.redo().unwrap();
+        assert_eq!("abcdef", &tree.to_string());
+        let diff = &compound.0[0];
+        assert_eq!(diff.char_index, 3);
+        assert_eq!(diff.new_char_length, 3);
+    }
+
+    #[test]
+    fn undo_returns_correct_cursor() {
+        let mut tree = EditTree::new(Rope::new());
+        tree.insert(0, "Hello");
+        let cursor_before = Cursor::end_of_buffer(&tree);
+        tree.create_revision(OpaqueDiff::empty(), cursor_before.clone());
+        // Insert more text
+        tree.insert(5, " world");
+        tree.create_revision(OpaqueDiff::empty(), Cursor::end_of_buffer(&tree));
+        let (_, undo_cursor) = tree.undo().unwrap();
+        assert_eq!(undo_cursor, cursor_before);
+    }
+
+    #[test]
+    fn redo_at_leaf_returns_none() {
+        let mut tree = EditTree::new(Rope::new());
+        tree.insert(0, "Hello");
+        tree.create_revision(OpaqueDiff::empty(), Cursor::end_of_buffer(&tree));
+        assert_eq!(None, tree.redo());
+    }
+
+    // --- Compound diff tests (C-1, C-2, C-3) ---
+
+    /// Helper: apply a compound diff to a Rope by removing char ranges in
+    /// descending order (as rectangle cut would do).
+    fn apply_compound_deletion(text: &mut Rope, compound: &CompoundDiff) {
+        // Sub-diffs are already in descending char_index order
+        for diff in &compound.0 {
+            if !diff.is_empty() && diff.old_char_length > 0 {
+                text.remove(diff.char_index..diff.char_index + diff.old_char_length);
+            }
+        }
+    }
+
+    #[test]
+    fn compound_diff_single_is_degenerate_case() {
+        // C-3: single OpaqueDiff in a CompoundDiff works the same
+        let mut tree = EditTree::new(Rope::from("Hello world"));
+        tree.insert(0, "X");
+        let diff = OpaqueDiff::new(0, 0, 1, 0, 0, 1);
+        tree.create_compound_revision(CompoundDiff::single(diff), Cursor::end_of_buffer(&tree));
+        assert_eq!("XHello world", &tree.to_string());
+        let (compound, _) = tree.undo().unwrap();
+        assert_eq!("Hello world", &tree.to_string());
+        assert_eq!(compound.0.len(), 1);
+    }
+
+    #[test]
+    fn compound_diff_multi_line_undo_is_atomic() {
+        // C-1: N-line discontinuous deletion as 1 revision, undo 1 click restores all
+        let text = Rope::from("ABCDE\nFGHIJ\nKLMNO\n");
+        let mut tree = EditTree::new(text);
+
+        // Simulate rectangle cut of columns 1..4 from lines 0,1,2
+        // Line 0: "ABCDE\n" -> remove chars 1..4 => "AE\n"
+        // Line 1: "FGHIJ\n" -> remove chars 7..10 => "FJ\n"
+        // Line 2: "KLMNO\n" -> remove chars 13..16 => "KO\n"
+        // Diffs in descending char_index order:
+        let diff2 = OpaqueDiff::new(13, 3, 0, 13, 3, 0); // line 2
+        let diff1 = OpaqueDiff::new(7, 3, 0, 7, 3, 0);   // line 1
+        let diff0 = OpaqueDiff::new(1, 3, 0, 1, 3, 0);    // line 0
+
+        let compound = CompoundDiff(vec![diff2, diff1, diff0]);
+
+        // Apply to staged
+        apply_compound_deletion(tree.staged_mut(), &compound);
+
+        tree.create_compound_revision(compound, Cursor::with_range(1..2));
+
+        assert_eq!("AE\nFJ\nKO\n", &tree.to_string());
+
+        // Undo 1 click should restore all lines
+        let (undo_compound, _) = tree.undo().unwrap();
+        assert_eq!("ABCDE\nFGHIJ\nKLMNO\n", &tree.to_string());
+
+        // Redo 1 click should re-apply all lines
+        let (redo_compound, _) = tree.redo().unwrap();
+        assert_eq!("AE\nFJ\nKO\n", &tree.to_string());
+    }
+
+    #[test]
+    fn compound_diff_outside_ranges_unchanged() {
+        // C-2: outside [0,left), [right,EOL], and non-selected lines unchanged
+        let text = Rope::from("ABCDE\nFGHIJ\nKLMNO\nPQRST\n");
+        let mut tree = EditTree::new(text);
+
+        // Rectangle: lines 1..2 (FGHIJ, KLMNO), columns 1..4
+        // Line 1: "FGHIJ\n" chars: F(6) G(7) H(8) I(9) J(10) \n(11)
+        //   Remove [7, 10) = "GHI" => "FJ\n"
+        // Line 2: "KLMNO\n" chars: K(12) L(13) M(14) N(15) O(16) \n(17)
+        //   Remove [13, 16) = "LMN" => "KO\n"
+        // Lines 0 and 3 unchanged
+        let diff1 = OpaqueDiff::new(13, 3, 0, 13, 3, 0); // line 2 first (higher char_index)
+        let diff0 = OpaqueDiff::new(7, 3, 0, 7, 3, 0);    // line 1
+
+        let compound = CompoundDiff(vec![diff1, diff0]);
+        apply_compound_deletion(tree.staged_mut(), &compound);
+        tree.create_compound_revision(compound, Cursor::with_range(7..8));
+
+        assert_eq!("ABCDE\nFJ\nKO\nPQRST\n", &tree.to_string());
+
+        // Verify lines 0 and 3 are unchanged
+        assert_eq!("ABCDE\n", &tree.line(0).to_string());
+        assert_eq!("PQRST\n", &tree.line(3).to_string());
+    }
+
+    #[test]
+    fn normal_edit_undo_granularity_unchanged_after_compound() {
+        // C-3: normal single-edit undo granularity is unchanged
+        let mut tree = EditTree::new(Rope::from("Hello"));
+        // Normal edit: insert 'X' at position 0
+        tree.insert(0, "X");
+        tree.create_revision(OpaqueDiff::new(0, 0, 1, 0, 0, 1), Cursor::with_range(1..2));
+        assert_eq!("XHello", &tree.to_string());
+
+        // Now do a compound edit: remove "el" (chars 2..4) from "XHello"
+        let compound = CompoundDiff(vec![
+            OpaqueDiff::new(2, 2, 0, 2, 2, 0),
+        ]);
+        apply_compound_deletion(tree.staged_mut(), &compound);
+        tree.create_compound_revision(compound, Cursor::with_range(2..3));
+        assert_eq!("XHlo", &tree.to_string());
+
+        // Undo the compound: should go back to "XHello"
+        tree.undo();
+        assert_eq!("XHello", &tree.to_string());
+
+        // Undo the single edit: should go back to "Hello"
+        tree.undo();
+        assert_eq!("Hello", &tree.to_string());
+    }
 }

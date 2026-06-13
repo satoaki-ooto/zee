@@ -517,9 +517,45 @@ impl Component for Buffer {
                 Some(Message::ClearSelection)
             } else {
                 this.properties.cursor.clear_selection();
+                this.properties.cursor.clear_rectangle_selection();
                 None
             }
         });
+
+        // Rectangle selection mode
+        //
+        // Enter rectangle mode (Ctrl-x r prefix, like Emacs)
+        bindings.add(
+            "begin-rectangle-selection",
+            [Ctrl('x'), Char('r'), Char(' ')],
+            |this: &Self| {
+                this.properties.cursor.begin_rectangle_selection();
+            },
+        );
+        // Rectangle copy
+        bindings.add(
+            "rectangle-copy",
+            [Ctrl('x'), Char('r'), Alt('w')],
+            |this: &Self| {
+                this.properties.cursor.rectangle_copy();
+            },
+        );
+        // Rectangle cut
+        bindings.add(
+            "rectangle-cut",
+            [Ctrl('x'), Char('r'), Ctrl('w')],
+            |this: &Self| {
+                this.properties.cursor.rectangle_cut();
+            },
+        );
+        // Rectangle delete
+        bindings.add(
+            "rectangle-delete",
+            [Ctrl('x'), Char('r'), Char('d')],
+            |this: &Self| {
+                this.properties.cursor.rectangle_delete();
+            },
+        );
     }
 }
 

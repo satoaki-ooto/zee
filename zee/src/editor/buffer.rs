@@ -10,7 +10,8 @@ use std::{
 use zi::ComponentLink;
 
 use zee_edit::{
-    graphemes::strip_trailing_whitespace, movement, tree::EditTree, Cursor, Direction, OpaqueDiff,
+    graphemes::{strip_trailing_whitespace, RopeExt},
+    movement, tree::EditTree, CompoundDiff, Cursor, Direction, OpaqueDiff,
 };
 use zee_grammar::Mode;
 
@@ -294,7 +295,7 @@ impl Buffer {
                 // We don't know the diff, so we just use OpaqueDiff::Empty.
                 // This is ok as we pass in fresh=true, so the previous parser
                 // tree won't be used.
-                self.update_parse_tree(&OpaqueDiff::empty(), true);
+                self.update_parse_tree_compound(&CompoundDiff::empty(), true);
             }
             // Failed to save the buffer
             BufferMessage::SaveBufferEnd(Err(error)) => {
@@ -320,76 +321,117 @@ impl Buffer {
         {
             let content = &self.content;
             let cursor = &mut self.cursors[cursor_id.0];
+            let tab_width = self.mode.indentation.tab_width();
             // Stateless
             match message {
-                CursorMessage::Up(n) => movement::move_vertically(
-                    content,
-                    cursor,
-                    self.mode.indentation.tab_width(),
-                    Direction::Backward,
-                    n,
-                ),
-                CursorMessage::Down(n) => movement::move_vertically(
-                    content,
-                    cursor,
-                    self.mode.indentation.tab_width(),
-                    Direction::Forward,
-                    n,
-                ),
+                CursorMessage::Up(n) => {
+                    movement::move_vertically(content, cursor, tab_width, Direction::Backward, n);
+                    if cursor.is_rectangle_mode() {
+                        cursor.update_rectangle_diagonal(content, tab_width);
+                    }
+                }
+                CursorMessage::Down(n) => {
+                    movement::move_vertically(content, cursor, tab_width, Direction::Forward, n);
+                    if cursor.is_rectangle_mode() {
+                        cursor.update_rectangle_diagonal(content, tab_width);
+                    }
+                }
                 CursorMessage::Left => {
-                    movement::move_horizontally(content, cursor, Direction::Backward, 1)
+                    movement::move_horizontally(content, cursor, Direction::Backward, 1);
+                    if cursor.is_rectangle_mode() {
+                        cursor.update_rectangle_diagonal(content, tab_width);
+                    }
                 }
                 CursorMessage::Right => {
-                    movement::move_horizontally(content, cursor, Direction::Forward, 1)
+                    movement::move_horizontally(content, cursor, Direction::Forward, 1);
+                    if cursor.is_rectangle_mode() {
+                        cursor.update_rectangle_diagonal(content, tab_width);
+                    }
                 }
-                CursorMessage::StartOfLine => movement::move_to_start_of_line(content, cursor),
-                CursorMessage::EndOfLine => movement::move_to_end_of_line(content, cursor),
-                CursorMessage::StartOfBuffer => movement::move_to_start_of_buffer(content, cursor),
-                CursorMessage::EndOfBuffer => movement::move_to_end_of_buffer(content, cursor),
+                CursorMessage::StartOfLine => {
+                    movement::move_to_start_of_line(content, cursor);
+                    if cursor.is_rectangle_mode() {
+                        cursor.update_rectangle_diagonal(content, tab_width);
+                    }
+                }
+                CursorMessage::EndOfLine => {
+                    movement::move_to_end_of_line(content, cursor);
+                    if cursor.is_rectangle_mode() {
+                        cursor.update_rectangle_diagonal(content, tab_width);
+                    }
+                }
+                CursorMessage::StartOfBuffer => {
+                    movement::move_to_start_of_buffer(content, cursor);
+                    if cursor.is_rectangle_mode() {
+                        cursor.update_rectangle_diagonal(content, tab_width);
+                    }
+                }
+                CursorMessage::EndOfBuffer => {
+                    movement::move_to_end_of_buffer(content, cursor);
+                    if cursor.is_rectangle_mode() {
+                        cursor.update_rectangle_diagonal(content, tab_width);
+                    }
+                }
                 CursorMessage::MoveWord(direction, count) => {
-                    movement::move_word(content, cursor, direction, count)
+                    movement::move_word(content, cursor, direction, count);
+                    if cursor.is_rectangle_mode() {
+                        cursor.update_rectangle_diagonal(content, tab_width);
+                    }
                 }
                 CursorMessage::MoveParagraph(direction, count) => {
-                    movement::move_paragraph(content, cursor, direction, count)
+                    movement::move_paragraph(content, cursor, direction, count);
+                    if cursor.is_rectangle_mode() {
+                        cursor.update_rectangle_diagonal(content, tab_width);
+                    }
                 }
 
                 CursorMessage::BeginSelection => cursor.begin_selection(),
                 CursorMessage::ClearSelection => {
                     cursor.clear_selection();
+                    cursor.clear_rectangle_selection();
                 }
                 CursorMessage::SelectAll => cursor.select_all(content),
+
+                CursorMessage::BeginRectangleSelection => {
+                    cursor.begin_rectangle_selection(content, tab_width)
+                }
+                CursorMessage::ClearRectangleSelection => cursor.clear_rectangle_selection(),
 
                 _ => {}
             }
         }
 
         let mut undoing = false;
-        let diff = {
+        let compound_diff = {
             match message {
                 CursorMessage::DeleteForward => {
                     let operation = self.cursors[cursor_id.0].delete_forward(&mut self.content);
                     if operation.diff.is_empty() {
                         self.context.log("End of buffer");
                     }
-                    operation.diff
+                    CompoundDiff::single(operation.diff)
                 }
                 CursorMessage::DeleteBackward => {
                     let operation = self.cursors[cursor_id.0].delete_backward(&mut self.content);
                     if operation.diff.is_empty() {
                         self.context.log("Beginning of buffer");
                     }
-                    operation.diff
+                    CompoundDiff::single(operation.diff)
                 }
                 CursorMessage::DeleteLine => {
                     let diff = self.delete_line(cursor_id);
                     if diff.is_empty() {
                         self.context.log("End of buffer");
                     }
-                    diff
+                    CompoundDiff::single(diff)
                 }
-                CursorMessage::Yank => self.paste_from_clipboard(cursor_id),
-                CursorMessage::CopySelection => self.copy_selection_to_clipboard(cursor_id),
-                CursorMessage::CutSelection => self.cut_selection_to_clipboard(cursor_id),
+                CursorMessage::Yank => CompoundDiff::single(self.paste_from_clipboard(cursor_id)),
+                CursorMessage::CopySelection => {
+                    CompoundDiff::single(self.copy_selection_to_clipboard(cursor_id))
+                }
+                CursorMessage::CutSelection => {
+                    CompoundDiff::single(self.cut_selection_to_clipboard(cursor_id))
+                }
                 CursorMessage::InsertTab => {
                     let (indentation_unit, indentation_count) = (
                         self.mode.indentation.to_char(),
@@ -405,7 +447,7 @@ impl Buffer {
                         Direction::Forward,
                         indentation_count,
                     );
-                    diff
+                    CompoundDiff::single(diff)
                 }
                 CursorMessage::InsertNewLine => {
                     let diff = self.cursors[cursor_id.0].insert_char(&mut self.content, '\n');
@@ -418,7 +460,7 @@ impl Buffer {
                         1,
                     );
                     movement::move_to_start_of_line(&self.content, cursor);
-                    diff
+                    CompoundDiff::single(diff)
                 }
                 CursorMessage::InsertChar {
                     character,
@@ -433,7 +475,7 @@ impl Buffer {
                             1,
                         );
                     }
-                    diff
+                    CompoundDiff::single(diff)
                 }
                 CursorMessage::Undo => {
                     undoing = true;
@@ -444,21 +486,26 @@ impl Buffer {
                     self.redo(cursor_id)
                 }
 
-                _ => OpaqueDiff::empty(),
+                // Rectangle operations
+                CursorMessage::RectangleCopy => self.rectangle_copy(cursor_id),
+                CursorMessage::RectangleCut => self.rectangle_cut(cursor_id),
+                CursorMessage::RectangleDelete => self.rectangle_delete(cursor_id),
+
+                _ => CompoundDiff::empty(),
             }
         };
 
-        if !diff.is_empty() {
+        if !compound_diff.is_empty() {
             self.modified_status = ModifiedStatus::Changed;
             for (id, cursor) in self.cursors.iter_mut().enumerate() {
                 if id != cursor_id.0 {
-                    cursor.reconcile(&self.content, &diff);
+                    cursor.reconcile_compound(&self.content, &compound_diff);
                 }
             }
             if !undoing {
                 self.content
-                    .create_revision(diff.clone(), self.cursors[cursor_id.0].clone());
-                self.update_parse_tree(&diff, false);
+                    .create_compound_revision(compound_diff.clone(), self.cursors[cursor_id.0].clone());
+                self.update_parse_tree_compound(&compound_diff, false);
             }
         }
     }
@@ -497,31 +544,234 @@ impl Buffer {
         }
     }
 
-    fn undo(&mut self, cursor_id: CursorId) -> OpaqueDiff {
+    /// Rectangle copy: extract text from rectangle region and set clipboard.
+    /// Non-destructive (diff empty). Width-0 rectangle is no-op.
+    fn rectangle_copy(&mut self, cursor_id: CursorId) -> CompoundDiff {
+        let rect = match self.cursors[cursor_id.0].rectangle_selection() {
+            Some(r) => r.clone(),
+            None => return CompoundDiff::empty(),
+        };
+
+        if rect.is_zero_width() {
+            // Width-0: no-op, don't touch clipboard
+            self.cursors[cursor_id.0].clear_rectangle_selection();
+            return CompoundDiff::empty();
+        }
+
+        let tab_width = self.mode.indentation.tab_width();
+        let mut parts: Vec<String> = Vec::new();
+
+        for line_idx in rect.line_start..=rect.line_end {
+            let line_char_start = self.content.line_to_char(line_idx);
+            let line = self.content.line(line_idx);
+            // Strip trailing newline for column mapping
+            let line_len = line.len_chars();
+            let slice_end = if line_len > 0 && line.char(line_len - 1) == '\n' {
+                line_char_start + line_len - 1
+            } else {
+                line_char_start + line_len
+            };
+            let line_slice = self.content.slice(line_char_start..slice_end);
+
+            let mapping = zee_edit::graphemes::visual_column_range_to_char_range(
+                tab_width,
+                &line_slice,
+                line_char_start,
+                rect.column_left,
+                rect.column_right,
+                zee_edit::graphemes::RaggedLinePolicy::Empty,
+            );
+
+            if mapping.is_empty() {
+                parts.push(String::new());
+            } else {
+                let extracted: String = self.content.slice(mapping.char_range()).into();
+                parts.push(extracted);
+            }
+        }
+
+        // No trailing newline (Emacs copy-rectangle-as-kill convention)
+        let clipboard_text = parts.join("\n");
+        self.context
+            .clipboard
+            .set_contents(clipboard_text)
+            .unwrap();
+
+        // Deselect after copy
+        self.cursors[cursor_id.0].clear_rectangle_selection();
+        CompoundDiff::empty()
+    }
+
+    /// Rectangle delete: remove text from rectangle region as compound diff.
+    /// Returns compound diff for undo/redo. Width-0 is no-op.
+    fn rectangle_delete_inner(&mut self, cursor_id: CursorId) -> (CompoundDiff, bool) {
+        let rect = match self.cursors[cursor_id.0].rectangle_selection() {
+            Some(r) => r.clone(),
+            None => return (CompoundDiff::empty(), false),
+        };
+
+        if rect.is_zero_width() {
+            return (CompoundDiff::empty(), false);
+        }
+
+        let tab_width = self.mode.indentation.tab_width();
+        let mut diffs: Vec<OpaqueDiff> = Vec::new();
+
+        // Compute all char ranges first (against original Rope)
+        let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+        for line_idx in rect.line_start..=rect.line_end {
+            let line_char_start = self.content.line_to_char(line_idx);
+            let line = self.content.line(line_idx);
+            let line_len = line.len_chars();
+            let slice_end = if line_len > 0 && line.char(line_len - 1) == '\n' {
+                line_char_start + line_len - 1
+            } else {
+                line_char_start + line_len
+            };
+            let line_slice = self.content.slice(line_char_start..slice_end);
+
+            let mapping = zee_edit::graphemes::visual_column_range_to_char_range(
+                tab_width,
+                &line_slice,
+                line_char_start,
+                rect.column_left,
+                rect.column_right,
+                zee_edit::graphemes::RaggedLinePolicy::Empty,
+            );
+
+            if !mapping.is_empty() {
+                ranges.push(mapping.char_range());
+            }
+        }
+
+        // Sort ranges in descending char_index order for safe removal
+        ranges.sort_by(|a, b| b.start.cmp(&a.start));
+
+        for range in &ranges {
+            let byte_start = self.content.char_to_byte(range.start);
+            let byte_end = self.content.char_to_byte(range.end);
+            diffs.push(OpaqueDiff::new(
+                byte_start,
+                byte_end - byte_start,
+                0,
+                range.start,
+                range.end - range.start,
+                0,
+            ));
+            self.content.staged_mut().remove(range.clone());
+        }
+
+        // Move cursor to top-left corner (r0, visual column left)
+        let top_line_char_start = self.content.line_to_char(rect.line_start);
+        // Find the char index at visual column `left` on the top line
+        let top_line = self.content.line(rect.line_start);
+        let top_line_len = top_line.len_chars();
+        let top_slice_end = if top_line_len > 0 && top_line.char(top_line_len - 1) == '\n' {
+            top_line_char_start + top_line_len - 1
+        } else {
+            top_line_char_start + top_line_len
+        };
+        let top_line_slice = self.content.slice(top_line_char_start..top_slice_end);
+        let (char_at_left, _) = zee_edit::graphemes::visual_column_to_char_index_pub(
+            tab_width, &top_line_slice, rect.column_left,
+        );
+        let new_cursor_pos = top_line_char_start + char_at_left;
+        let grapheme_end = self.content.next_grapheme_boundary(new_cursor_pos);
+        self.cursors[cursor_id.0] = Cursor::with_range(new_cursor_pos..grapheme_end);
+
+        (CompoundDiff(diffs), true)
+    }
+
+    /// Rectangle cut: copy to clipboard then delete.
+    fn rectangle_cut(&mut self, cursor_id: CursorId) -> CompoundDiff {
+        // First, extract clipboard content before deletion
+        let rect = self.cursors[cursor_id.0].rectangle_selection().cloned();
+        let tab_width = self.mode.indentation.tab_width();
+
+        if let Some(ref r) = rect {
+            if !r.is_zero_width() {
+                let mut parts: Vec<String> = Vec::new();
+                for line_idx in r.line_start..=r.line_end {
+                    let line_char_start = self.content.line_to_char(line_idx);
+                    let line = self.content.line(line_idx);
+                    let line_len = line.len_chars();
+                    let slice_end = if line_len > 0 && line.char(line_len - 1) == '\n' {
+                        line_char_start + line_len - 1
+                    } else {
+                        line_char_start + line_len
+                    };
+                    let line_slice = self.content.slice(line_char_start..slice_end);
+                    let mapping = zee_edit::graphemes::visual_column_range_to_char_range(
+                        tab_width,
+                        &line_slice,
+                        line_char_start,
+                        r.column_left,
+                        r.column_right,
+                        zee_edit::graphemes::RaggedLinePolicy::Empty,
+                    );
+                    if mapping.is_empty() {
+                        parts.push(String::new());
+                    } else {
+                        let extracted: String = self.content.slice(mapping.char_range()).into();
+                        parts.push(extracted);
+                    }
+                }
+                let clipboard_text = parts.join("\n");
+                self.context
+                    .clipboard
+                    .set_contents(clipboard_text)
+                    .unwrap();
+            }
+        }
+
+        let (compound, had_deletion) = self.rectangle_delete_inner(cursor_id);
+        if !had_deletion && rect.is_some() {
+            self.cursors[cursor_id.0].clear_rectangle_selection();
+        }
+        compound
+    }
+
+    /// Rectangle delete: remove rectangle region without touching clipboard.
+    fn rectangle_delete(&mut self, cursor_id: CursorId) -> CompoundDiff {
+        let (compound, had_deletion) = self.rectangle_delete_inner(cursor_id);
+        if !had_deletion {
+            if self.cursors[cursor_id.0].is_rectangle_mode() {
+                self.cursors[cursor_id.0].clear_rectangle_selection();
+            }
+        }
+        compound
+    }
+
+    fn undo(&mut self, cursor_id: CursorId) -> CompoundDiff {
         self.content
             .undo()
-            .map(|(diff, cursor)| {
+            .map(|(compound, cursor)| {
                 self.cursors[cursor_id.0] = cursor;
-                self.update_parse_tree(&diff, true);
-                diff
+                self.update_parse_tree_compound(&compound, true);
+                compound
             })
-            .unwrap_or_else(OpaqueDiff::empty)
+            .unwrap_or_else(CompoundDiff::empty)
     }
 
-    fn redo(&mut self, cursor_id: CursorId) -> OpaqueDiff {
+    fn redo(&mut self, cursor_id: CursorId) -> CompoundDiff {
         self.content
             .redo()
-            .map(|(diff, cursor)| {
+            .map(|(compound, cursor)| {
                 self.cursors[cursor_id.0] = cursor;
-                self.update_parse_tree(&diff, true);
-                diff
+                self.update_parse_tree_compound(&compound, true);
+                compound
             })
-            .unwrap_or_else(OpaqueDiff::empty)
+            .unwrap_or_else(CompoundDiff::empty)
     }
 
-    fn update_parse_tree(&mut self, diff: &OpaqueDiff, fresh: bool) {
+    fn update_parse_tree_compound(&mut self, compound: &CompoundDiff, fresh: bool) {
         if let Some(parser) = self.parser.as_mut() {
-            if fresh {
+            // For compound diffs with more than one sub-diff, force a fresh
+            // parse since the byte indices in subsequent sub-diffs were
+            // computed against the original text and would be wrong for
+            // incremental tree editing.
+            let needs_fresh = fresh || compound.0.len() > 1;
+            if needs_fresh {
                 parser.tree = None;
             }
 
@@ -530,8 +780,13 @@ impl Buffer {
             let buffer_id = self.id;
             let link = self.context.link.clone();
             let version = self.content.version();
-            parser.edit(diff);
-            parser.spawn(task_pool, staged_text, fresh, move |status| {
+            // For single-diff case, apply the edit incrementally
+            if !needs_fresh {
+                if let Some(diff) = compound.0.first() {
+                    parser.edit(diff);
+                }
+            }
+            parser.spawn(task_pool, staged_text, needs_fresh, move |status| {
                 link.send(
                     BuffersMessage::new(buffer_id, BufferMessage::ParseSyntax { version, status })
                         .into(),
@@ -751,6 +1006,31 @@ impl BufferCursor {
             move_forward,
         });
     }
+
+    #[inline]
+    pub fn begin_rectangle_selection(&self) {
+        self.send_cursor(CursorMessage::BeginRectangleSelection);
+    }
+
+    #[inline]
+    pub fn clear_rectangle_selection(&self) {
+        self.send_cursor(CursorMessage::ClearRectangleSelection);
+    }
+
+    #[inline]
+    pub fn rectangle_copy(&self) {
+        self.send_cursor(CursorMessage::RectangleCopy);
+    }
+
+    #[inline]
+    pub fn rectangle_cut(&self) {
+        self.send_cursor(CursorMessage::RectangleCut);
+    }
+
+    #[inline]
+    pub fn rectangle_delete(&self) {
+        self.send_cursor(CursorMessage::RectangleDelete);
+    }
 }
 
 #[derive(Debug)]
@@ -801,6 +1081,13 @@ pub enum CursorMessage {
     // Undo / Redo
     Undo,
     Redo,
+
+    // Rectangle selection mode
+    BeginRectangleSelection,
+    ClearRectangleSelection,
+    RectangleCopy,
+    RectangleCut,
+    RectangleDelete,
 }
 
 #[derive(Clone)]
