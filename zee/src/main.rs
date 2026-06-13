@@ -7,6 +7,7 @@ mod editor;
 mod error;
 mod logging;
 mod panicking;
+mod rectangle_kill;
 mod syntax;
 mod task;
 mod utils;
@@ -105,6 +106,7 @@ fn start_editor() -> Result<()> {
         config: editor_config,
         task_pool: TaskPool::new()?,
         clipboard: clipboard::create()?,
+        rectangle_kill_store: rectangle_kill::RectangleKillStore::new(),
     }))?;
 
     Ok(())

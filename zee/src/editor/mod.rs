@@ -23,6 +23,7 @@ use zee_grammar::Mode;
 
 use crate::{
     clipboard::Clipboard,
+    rectangle_kill::RectangleKillStore,
     components::{
         buffer::{Buffer as BufferView, Properties as BufferViewProperties},
         prompt::{
@@ -82,6 +83,7 @@ pub struct Properties {
     pub config: EditorConfig,
     pub task_pool: TaskPool,
     pub clipboard: Arc<dyn Clipboard>,
+    pub rectangle_kill_store: RectangleKillStore,
 }
 
 pub struct Context {
@@ -92,6 +94,7 @@ pub struct Context {
     pub modes: Vec<Mode>,
     pub task_pool: TaskPool,
     pub clipboard: Arc<dyn Clipboard>,
+    pub rectangle_kill_store: RectangleKillStore,
     pub link: ComponentLink<Editor>,
 }
 
@@ -246,6 +249,7 @@ impl Component for Editor {
                 config: properties.config,
                 task_pool: properties.task_pool,
                 clipboard: properties.clipboard,
+                rectangle_kill_store: properties.rectangle_kill_store,
                 link,
             }
             .into(),
