@@ -11,10 +11,10 @@ rust-version = "1.85"
 [dependencies]
 anyhow = "1.0.58"
 cc = { version = "1.0.73", features = ["parallel"] }
-colored = "2.0.0"
-dirs = "4.0.0"
+colored = "3"
+dirs = "6"
 include_dir = "0.7.2"
-libloading = "0.7.3"
+libloading = "0.9"
 log = "0.4.17"
 once_cell = { version = "1.13.0", features = ["parking_lot"] }
 rayon = "1.5.3"

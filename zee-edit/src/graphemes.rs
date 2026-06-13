@@ -11,6 +11,8 @@ pub fn width(tab_width: usize, slice: &RopeSlice) -> usize {
     rope_slice_as_str(slice, |text| {
         if text == "\t" {
             tab_width
+        } else if text == "\n" || text == "\r\n" || text == "\r" {
+            0
         } else {
             text.chars().filter(|character| *character == '\t').count() * tab_width
                 + UnicodeWidthStr::width(text)
@@ -451,6 +453,45 @@ mod tests {
     }
 
     const MULTI_CHAR_EMOJI: &str = r#"👨‍👨‍👧‍👧"#;
+
+    // --- width() regression for unicode-width 0.2 ---
+    // unicode-width 0.2 reports `\n` as width 1 (0.1 reported 0). The textarea
+    // renderer relies on line-break graphemes being width 0, so width() must
+    // keep treating them as 0 regardless of the unicode-width version.
+
+    #[test]
+    fn width_newline_is_zero() {
+        for line_break in ["\n", "\r\n", "\r"] {
+            let text = Rope::from(line_break);
+            assert_eq!(width(4, &text.slice(..)), 0, "line break {line_break:?}");
+        }
+    }
+
+    #[test]
+    fn width_tab_and_text_unaffected() {
+        let tab = Rope::from("\t");
+        assert_eq!(width(4, &tab.slice(..)), 4);
+
+        let ascii = Rope::from("hello");
+        assert_eq!(width(4, &ascii.slice(..)), 5);
+
+        // CJK stays width 2 across unicode-width versions.
+        let cjk = Rope::from("漢");
+        assert_eq!(width(4, &cjk.slice(..)), 2);
+    }
+
+    #[test]
+    fn width_line_grapheme_sum_ignores_trailing_newline() {
+        // Mirrors the textarea path: it sums width() per grapheme. The trailing
+        // `\n` grapheme must contribute 0 so end-of-line rendering and cursor
+        // placement do not shift under unicode-width 0.2.
+        let text = Rope::from("abc\n");
+        let line = text.slice(text.line_to_char(0)..text.line_to_char(1));
+        let total: usize = RopeGraphemes::new(&line)
+            .map(|grapheme| width(4, &grapheme))
+            .sum();
+        assert_eq!(total, 3);
+    }
 
     // --- Column mapping tests (spec: rectangle-column-mapping) ---
 
