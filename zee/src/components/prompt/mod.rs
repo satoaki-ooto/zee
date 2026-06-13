@@ -8,9 +8,9 @@ mod interactive;
 
 use std::{borrow::Cow, path::PathBuf};
 use zi::{
-    components::text::{Text, TextProperties},
     Background, Callback, Component, ComponentExt, ComponentLink, Foreground, Layout, Rect,
     ShouldRender, Style,
+    components::text::{Text, TextProperties},
 };
 
 use crate::editor::{BufferId, ContextHandle};
@@ -72,7 +72,7 @@ impl Action {
 
     pub fn initial_height(&self) -> usize {
         match self {
-            Self::PickBuffer { ref entries, .. } => {
+            Self::PickBuffer { entries, .. } => {
                 1 + std::cmp::min(std::cmp::max(entries.len(), 1), PROMPT_MAX_HEIGHT)
             }
             _ => 1,

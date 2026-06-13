@@ -8,7 +8,7 @@ use zi::{
     prelude::*,
 };
 
-use zee_edit::{tree::EditTree, Direction};
+use zee_edit::{Direction, tree::EditTree};
 use zee_grammar::Mode;
 
 use self::{
@@ -21,8 +21,8 @@ use super::edit_tree_viewer::{
 };
 use crate::{
     editor::{
-        buffer::{BufferCursor, CursorMessage, ModifiedStatus, RepositoryRc},
         ContextHandle,
+        buffer::{BufferCursor, CursorMessage, ModifiedStatus, RepositoryRc},
     },
     syntax::{highlight::Theme as SyntaxTheme, parse::ParseTree},
     versioned::WeakHandle,

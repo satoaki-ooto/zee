@@ -1,8 +1,8 @@
 use ropey::Rope;
 
 use crate::{
-    graphemes::{RopeExt, RopeGraphemes},
     Cursor,
+    graphemes::{RopeExt, RopeGraphemes},
 };
 
 /// The movement direction

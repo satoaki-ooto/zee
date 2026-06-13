@@ -109,11 +109,7 @@ impl Component for EditTreeViewer {
                     && y < canvas.size().height as isize
                 {
                     let connector = if child_index == 0 {
-                        if num_children > 1 {
-                            "├"
-                        } else {
-                            "│"
-                        }
+                        if num_children > 1 { "├" } else { "│" }
                     } else if child_index == num_children - 1 {
                         "┐"
                     } else {

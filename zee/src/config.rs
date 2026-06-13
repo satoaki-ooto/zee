@@ -1,9 +1,9 @@
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
 use once_cell::sync::Lazy;
 use serde_derive::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use zee_grammar::{config::ModeConfig, Mode};
+use zee_grammar::{Mode, config::ModeConfig};
 
 use crate::error::{Context, Result};
 

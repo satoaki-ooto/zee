@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use colored::Colorize;
 use include_dir::Dir;
 use libloading::{Library, Symbol};
@@ -11,8 +11,9 @@ use std::{
 use tree_sitter::{Language, Query};
 
 use crate::{
+    Grammar,
     config::{self, GrammarConfig, GrammarSource, ModeConfig},
-    git, Grammar,
+    git,
 };
 
 const BUILD_DIR: &str = "build";

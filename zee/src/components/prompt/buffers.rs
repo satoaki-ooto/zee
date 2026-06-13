@@ -2,22 +2,22 @@ use ropey::Rope;
 use size_format::SizeFormatterBinary;
 use std::{borrow::Cow, convert::TryInto, path::PathBuf};
 use zi::{
+    Bindings, Callback, Colour, Component, ComponentExt, ComponentLink, Container, FlexBasis,
+    FlexDirection, Item, Key, Layout, Rect, ShouldRender, Style,
     components::{
         input::{Cursor, Input, InputChange, InputProperties, InputStyle},
         select::{Select, SelectProperties},
         text::{Text, TextAlign, TextProperties},
     },
     unicode_width::UnicodeWidthStr,
-    Bindings, Callback, Colour, Component, ComponentExt, ComponentLink, Container, FlexBasis,
-    FlexDirection, Item, Key, Layout, Rect, ShouldRender, Style,
 };
 
 use zee_grammar::Mode;
 
 use super::{
+    Theme,
     matcher::Matcher,
     status::{Status, StatusProperties},
-    Theme,
 };
 use crate::{
     editor::{BufferId, ContextHandle},

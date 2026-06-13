@@ -1,4 +1,4 @@
-use zi::{terminal::Key, Bindings, EndsWith, FlexDirection};
+use zi::{Bindings, EndsWith, FlexDirection, terminal::Key};
 
 use super::{Editor, FileSource, Message};
 

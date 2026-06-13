@@ -2,8 +2,8 @@ use once_cell::sync::Lazy;
 use pkg_version::{pkg_version_major, pkg_version_minor, pkg_version_patch};
 use std::{borrow::Cow, cmp};
 use zi::{
-    unicode_width::UnicodeWidthStr, Canvas, Component, ComponentLink, Layout, Rect, ShouldRender,
-    Size, Style,
+    Canvas, Component, ComponentLink, Layout, Rect, ShouldRender, Size, Style,
+    unicode_width::UnicodeWidthStr,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

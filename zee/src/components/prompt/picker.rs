@@ -1,4 +1,4 @@
-use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
 use ignore::WalkBuilder;
 use ropey::Rope;
 use std::{
@@ -8,18 +8,18 @@ use std::{
     rc::Rc,
 };
 use zi::{
+    Callback,
     components::{
         input::{Cursor, Input, InputChange, InputProperties, InputStyle},
         select::{Select, SelectProperties},
         text::{Text, TextProperties},
     },
     prelude::*,
-    Callback,
 };
 
 use super::{
+    PROMPT_MAX_HEIGHT, Theme,
     status::{Status, StatusProperties},
-    Theme, PROMPT_MAX_HEIGHT,
 };
 use crate::{
     editor::ContextHandle,

@@ -6,8 +6,8 @@ description = "A modern editor for the terminal, in the spirit of Emacs"
 readme = "README.md"
 homepage = "https://github.com/zee-editor/zee"
 license = "MIT OR Apache-2.0"
-edition = "2021"
-rust-version = "1.59"
+edition = "2024"
+rust-version = "1.85"
 include = ["/src", "/config"]
 
 [dependencies]

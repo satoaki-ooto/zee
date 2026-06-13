@@ -1,9 +1,9 @@
 use std::borrow::Cow;
 
 use zi::{
+    Callback,
     components::text::{Text, TextProperties},
     prelude::*,
-    Callback,
 };
 
 use super::Theme;

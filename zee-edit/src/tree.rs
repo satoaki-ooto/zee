@@ -3,7 +3,7 @@ use ropey::Rope;
 use smallvec::SmallVec;
 use std::ops::{Deref, DerefMut};
 
-use crate::{movement, CompoundDiff, Cursor, OpaqueDiff};
+use crate::{CompoundDiff, Cursor, OpaqueDiff, movement};
 
 #[derive(Debug, Clone)]
 pub struct Revision {
@@ -129,19 +129,17 @@ impl EditTree {
             redo_index,
             ..
         } = revisions[*head_index];
-        children
-            .get(redo_index)
-            .map(|Reference { ref diff, index }| {
-                let Revision {
-                    ref cursor,
-                    ref text,
-                    ..
-                } = revisions[*index];
-                *staged = text.clone();
-                *has_staged_changes = false;
-                *head_index = *index;
-                (diff.clone(), cursor.clone())
-            })
+        children.get(redo_index).map(|Reference { diff, index }| {
+            let Revision {
+                ref cursor,
+                ref text,
+                ..
+            } = revisions[*index];
+            *staged = text.clone();
+            *has_staged_changes = false;
+            *head_index = *index;
+            (diff.clone(), cursor.clone())
+        })
     }
 
     pub fn staged(&self) -> &Rope {
@@ -381,8 +379,8 @@ mod tests {
         // Line 2: "KLMNO\n" -> remove chars 13..16 => "KO\n"
         // Diffs in descending char_index order:
         let diff2 = OpaqueDiff::new(13, 3, 0, 13, 3, 0); // line 2
-        let diff1 = OpaqueDiff::new(7, 3, 0, 7, 3, 0);   // line 1
-        let diff0 = OpaqueDiff::new(1, 3, 0, 1, 3, 0);    // line 0
+        let diff1 = OpaqueDiff::new(7, 3, 0, 7, 3, 0); // line 1
+        let diff0 = OpaqueDiff::new(1, 3, 0, 1, 3, 0); // line 0
 
         let compound = CompoundDiff(vec![diff2, diff1, diff0]);
 
@@ -415,7 +413,7 @@ mod tests {
         //   Remove [13, 16) = "LMN" => "KO\n"
         // Lines 0 and 3 unchanged
         let diff1 = OpaqueDiff::new(13, 3, 0, 13, 3, 0); // line 2 first (higher char_index)
-        let diff0 = OpaqueDiff::new(7, 3, 0, 7, 3, 0);    // line 1
+        let diff0 = OpaqueDiff::new(7, 3, 0, 7, 3, 0); // line 1
 
         let compound = CompoundDiff(vec![diff1, diff0]);
         apply_compound_deletion(tree.staged_mut(), &compound);
@@ -438,9 +436,7 @@ mod tests {
         assert_eq!("XHello", &tree.to_string());
 
         // Now do a compound edit: remove "el" (chars 2..4) from "XHello"
-        let compound = CompoundDiff(vec![
-            OpaqueDiff::new(2, 2, 0, 2, 2, 0),
-        ]);
+        let compound = CompoundDiff(vec![OpaqueDiff::new(2, 2, 0, 2, 2, 0)]);
         apply_compound_deletion(tree.staged_mut(), &compound);
         tree.create_compound_revision(compound, Cursor::with_range(2..3));
         assert_eq!("XHlo", &tree.to_string());

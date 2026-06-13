@@ -1,4 +1,4 @@
-use ropey::{iter::Chunks, str_utils, Rope, RopeSlice};
+use ropey::{Rope, RopeSlice, iter::Chunks, str_utils};
 use std::ops::Range;
 use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
 use unicode_width::UnicodeWidthStr;
@@ -180,8 +180,7 @@ pub fn visual_column_range_to_char_range(
         };
     }
 
-    let (char_at_left, visual_at_left) =
-        visual_column_to_char_index(tab_width, line_slice, left);
+    let (char_at_left, visual_at_left) = visual_column_to_char_index(tab_width, line_slice, left);
     let char_at_right = visual_column_to_char_end(tab_width, line_slice, right);
 
     // Check if line is shorter than left
@@ -472,7 +471,12 @@ mod tests {
         let slice = line_slice(&text, 0);
         let line_char_start = text.line_to_char(0);
         let mapping = visual_column_range_to_char_range(
-            4, &slice, line_char_start, 2, 5, RaggedLinePolicy::Empty,
+            4,
+            &slice,
+            line_char_start,
+            2,
+            5,
+            RaggedLinePolicy::Empty,
         );
         assert_eq!(mapping.char_range(), 2..5);
         assert!(!mapping.line_shorter_than_left);
@@ -484,7 +488,12 @@ mod tests {
         let slice = line_slice(&text, 0);
         let line_char_start = text.line_to_char(0);
         let mapping = visual_column_range_to_char_range(
-            4, &slice, line_char_start, 0, 11, RaggedLinePolicy::Empty,
+            4,
+            &slice,
+            line_char_start,
+            0,
+            11,
+            RaggedLinePolicy::Empty,
         );
         assert_eq!(mapping.char_range(), 0..11);
     }
@@ -498,10 +507,18 @@ mod tests {
         let line_char_start = text.line_to_char(0);
         // Range [2, 5) covers 漢 and D
         let mapping = visual_column_range_to_char_range(
-            4, &slice, line_char_start, 2, 5, RaggedLinePolicy::Empty,
+            4,
+            &slice,
+            line_char_start,
+            2,
+            5,
+            RaggedLinePolicy::Empty,
         );
         // 漢 starts at char 2, D ends at char 4
-        assert_eq!(mapping.char_range(), line_char_start + 2..line_char_start + 4);
+        assert_eq!(
+            mapping.char_range(),
+            line_char_start + 2..line_char_start + 4
+        );
     }
 
     #[test]
@@ -513,10 +530,18 @@ mod tests {
         let line_char_start = text.line_to_char(0);
         // Range [1, 5) covers the tab
         let mapping = visual_column_range_to_char_range(
-            4, &slice, line_char_start, 1, 5, RaggedLinePolicy::Empty,
+            4,
+            &slice,
+            line_char_start,
+            1,
+            5,
+            RaggedLinePolicy::Empty,
         );
         // Tab is at char 1, char after tab is 2
-        assert_eq!(mapping.char_range(), line_char_start + 1..line_char_start + 2);
+        assert_eq!(
+            mapping.char_range(),
+            line_char_start + 1..line_char_start + 2
+        );
     }
 
     #[test]
@@ -526,7 +551,12 @@ mod tests {
         let slice = line_slice(&text, 0);
         let line_char_start = text.line_to_char(0);
         let mapping = visual_column_range_to_char_range(
-            4, &slice, line_char_start, 5, 8, RaggedLinePolicy::Empty,
+            4,
+            &slice,
+            line_char_start,
+            5,
+            8,
+            RaggedLinePolicy::Empty,
         );
         // Line is shorter than left => empty range
         assert!(mapping.is_empty());
@@ -540,10 +570,18 @@ mod tests {
         let slice = line_slice(&text, 0);
         let line_char_start = text.line_to_char(0);
         let mapping = visual_column_range_to_char_range(
-            4, &slice, line_char_start, 3, 8, RaggedLinePolicy::Empty,
+            4,
+            &slice,
+            line_char_start,
+            3,
+            8,
+            RaggedLinePolicy::Empty,
         );
         // Should return [3, 5) — only the existing chars, no padding
-        assert_eq!(mapping.char_range(), line_char_start + 3..line_char_start + 5);
+        assert_eq!(
+            mapping.char_range(),
+            line_char_start + 3..line_char_start + 5
+        );
         assert!(!mapping.line_shorter_than_left);
     }
 
@@ -553,7 +591,12 @@ mod tests {
         let slice = line_slice(&text, 0);
         let line_char_start = text.line_to_char(0);
         let mapping = visual_column_range_to_char_range(
-            4, &slice, line_char_start, 3, 3, RaggedLinePolicy::Empty,
+            4,
+            &slice,
+            line_char_start,
+            3,
+            3,
+            RaggedLinePolicy::Empty,
         );
         assert!(mapping.is_empty());
     }
@@ -567,10 +610,18 @@ mod tests {
         let line_char_start = text.line_to_char(0);
         // Range [1, 3) overlaps both 漢 and 字
         let mapping = visual_column_range_to_char_range(
-            4, &slice, line_char_start, 1, 3, RaggedLinePolicy::Empty,
+            4,
+            &slice,
+            line_char_start,
+            1,
+            3,
+            RaggedLinePolicy::Empty,
         );
         // Both graphemes overlap the range, so chars 0..2
-        assert_eq!(mapping.char_range(), line_char_start + 0..line_char_start + 2);
+        assert_eq!(
+            mapping.char_range(),
+            line_char_start + 0..line_char_start + 2
+        );
     }
 
     #[test]
@@ -587,13 +638,26 @@ mod tests {
             for left in 0..8 {
                 for right in left..8 {
                     let mapping1 = visual_column_range_to_char_range(
-                        tab_width, &slice, line_char_start, left, right, RaggedLinePolicy::Empty,
+                        tab_width,
+                        &slice,
+                        line_char_start,
+                        left,
+                        right,
+                        RaggedLinePolicy::Empty,
                     );
                     let mapping2 = visual_column_range_to_char_range(
-                        tab_width, &slice, line_char_start, left, right, RaggedLinePolicy::Empty,
+                        tab_width,
+                        &slice,
+                        line_char_start,
+                        left,
+                        right,
+                        RaggedLinePolicy::Empty,
                     );
-                    assert_eq!(mapping1, mapping2,
-                        "line={} left={} right={}", line_idx, left, right);
+                    assert_eq!(
+                        mapping1, mapping2,
+                        "line={} left={} right={}",
+                        line_idx, left, right
+                    );
                 }
             }
         }

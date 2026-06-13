@@ -1,8 +1,8 @@
 use size_format::SizeFormatterBinary;
 use std::{ops::Range, path::PathBuf};
 use zi::{
-    unicode_width::UnicodeWidthStr, Canvas, Component, ComponentLink, Layout, Rect, ShouldRender,
-    Size, Style,
+    Canvas, Component, ComponentLink, Layout, Rect, ShouldRender, Size, Style,
+    unicode_width::UnicodeWidthStr,
 };
 
 use zee_grammar::Mode;

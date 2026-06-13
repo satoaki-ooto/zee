@@ -90,13 +90,13 @@ impl FilenamePattern {
 
     pub fn matches(&self, filename: impl AsRef<Path>) -> bool {
         match self {
-            Self::Suffix(ref suffix) => filename
+            Self::Suffix(suffix) => filename
                 .as_ref()
                 .file_name()
                 .and_then(OsStr::to_str)
                 .map(|s| s.ends_with(suffix))
                 .unwrap_or(false),
-            Self::Name(ref expected_name) => filename
+            Self::Name(expected_name) => filename
                 .as_ref()
                 .file_name()
                 .and_then(OsStr::to_str)

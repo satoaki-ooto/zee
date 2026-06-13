@@ -89,10 +89,7 @@ mod tests {
         );
         // Clipboard still matches recorded text
         let result = store.peek("ab\n\ncd");
-        assert_eq!(
-            result,
-            Some(vec!["ab".into(), String::new(), "cd".into()])
-        );
+        assert_eq!(result, Some(vec!["ab".into(), String::new(), "cd".into()]));
     }
 
     // -- 5.2: Rectangle cut -> same record/peek. Delete (no record) stays None.

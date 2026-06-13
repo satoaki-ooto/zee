@@ -10,8 +10,10 @@ use std::{
 use zi::ComponentLink;
 
 use zee_edit::{
-    graphemes::{strip_trailing_whitespace, RopeExt},
-    movement, tree::EditTree, CompoundDiff, Cursor, Direction, OpaqueDiff, RectangleSelection,
+    CompoundDiff, Cursor, Direction, OpaqueDiff, RectangleSelection,
+    graphemes::{RopeExt, strip_trailing_whitespace},
+    movement,
+    tree::EditTree,
 };
 use zee_grammar::Mode;
 
@@ -491,8 +493,10 @@ impl Buffer {
                 }
             }
             if !undoing {
-                self.content
-                    .create_compound_revision(compound_diff.clone(), self.cursors[cursor_id.0].clone());
+                self.content.create_compound_revision(
+                    compound_diff.clone(),
+                    self.cursors[cursor_id.0].clone(),
+                );
                 self.update_parse_tree_compound(&compound_diff, false);
             }
         }
@@ -582,7 +586,12 @@ impl Buffer {
         let tab_width = self.mode.indentation.tab_width();
         let ranges = compute_rectangle_char_ranges(&self.content, &rect, tab_width);
         let diffs = remove_ranges_and_build_diffs(&mut self.content, &ranges);
-        move_cursor_to_top_left(&self.content, &mut self.cursors[cursor_id.0], &rect, tab_width);
+        move_cursor_to_top_left(
+            &self.content,
+            &mut self.cursors[cursor_id.0],
+            &rect,
+            tab_width,
+        );
 
         (CompoundDiff(diffs), true)
     }
@@ -660,12 +669,17 @@ impl Buffer {
         let buffer_id = self.id;
         let version = self.content.version();
         let link = self.context.link.clone();
-        parser.spawn(&self.context.task_pool, staged_text, needs_fresh, move |status| {
-            link.send(
-                BuffersMessage::new(buffer_id, BufferMessage::ParseSyntax { version, status })
-                    .into(),
-            )
-        });
+        parser.spawn(
+            &self.context.task_pool,
+            staged_text,
+            needs_fresh,
+            move |status| {
+                link.send(
+                    BuffersMessage::new(buffer_id, BufferMessage::ParseSyntax { version, status })
+                        .into(),
+                )
+            },
+        );
     }
 
     fn spawn_save_file(&mut self) {
@@ -817,7 +831,9 @@ fn move_cursor_to_top_left(
     };
     let top_line_slice = content.slice(top_line_char_start..top_slice_end);
     let (char_at_left, _) = zee_edit::graphemes::visual_column_to_char_index_pub(
-        tab_width, &top_line_slice, rect.column_left,
+        tab_width,
+        &top_line_slice,
+        rect.column_left,
     );
     let new_cursor_pos = top_line_char_start + char_at_left;
     let grapheme_end = content.next_grapheme_boundary(new_cursor_pos);
