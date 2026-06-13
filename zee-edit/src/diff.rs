@@ -1,5 +1,33 @@
 use ropey::Rope;
 
+/// A compound diff: an ordered sequence of `OpaqueDiff`s that together form
+/// one logical edit operation. A single continuous edit is represented as a
+/// compound diff with one element (degenerate case for C-3 backward compat).
+/// Rectangle cut/delete produces N diffs (one per line), applied in
+/// char_index descending order.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CompoundDiff(pub Vec<OpaqueDiff>);
+
+impl CompoundDiff {
+    pub fn single(diff: OpaqueDiff) -> Self {
+        Self(vec![diff])
+    }
+
+    pub fn empty() -> Self {
+        Self(vec![OpaqueDiff::empty()])
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.iter().all(|d| d.is_empty())
+    }
+
+    /// Reverse all sub-diffs and reverse their order, so that undo applies
+    /// them in the correct opposite sequence.
+    pub fn reverse(&self) -> Self {
+        Self(self.0.iter().rev().map(|d| d.reverse()).collect())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct OpaqueDiff {
     pub byte_index: usize,

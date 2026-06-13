@@ -8,10 +8,52 @@ use ropey::{Rope, RopeSlice};
 use std::{cmp, ops::Range};
 
 pub use self::{
-    diff::{DeleteOperation, OpaqueDiff},
+    diff::{CompoundDiff, DeleteOperation, OpaqueDiff},
     graphemes::{ByteIndex, CharIndex, LineIndex, RopeExt, RopeGraphemes},
     movement::Direction,
 };
+
+/// Rectangle selection state: (line range) x (visual column range).
+///
+/// `line_range` is inclusive on both ends (start..=end).
+/// `column_range` is half-open: `[left, right)` in visual columns.
+/// Width-0 rectangle: `left == right` (valid selection, no-op for copy/cut).
+/// Anchor is the fixed corner; the cursor is the moving diagonal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RectangleSelection {
+    pub anchor_line: LineIndex,
+    pub anchor_column: usize,
+    pub line_start: LineIndex,
+    pub line_end: LineIndex,
+    pub column_left: usize,
+    pub column_right: usize,
+}
+
+impl RectangleSelection {
+    pub fn new(anchor_line: LineIndex, anchor_column: usize) -> Self {
+        Self {
+            anchor_line,
+            anchor_column,
+            line_start: anchor_line,
+            line_end: anchor_line,
+            column_left: anchor_column,
+            column_right: anchor_column,
+        }
+    }
+
+    /// Update the diagonal (cursor position) and re-normalize.
+    pub fn update_diagonal(&mut self, cursor_line: LineIndex, cursor_column: usize) {
+        self.line_start = self.anchor_line.min(cursor_line);
+        self.line_end = self.anchor_line.max(cursor_line);
+        self.column_left = self.anchor_column.min(cursor_column);
+        self.column_right = self.anchor_column.max(cursor_column);
+    }
+
+    /// Whether this rectangle has zero width (column_left == column_right).
+    pub fn is_zero_width(&self) -> bool {
+        self.column_left == self.column_right
+    }
+}
 
 trait RopeCursorExt {
     fn cursor_to_line(&self, cursor: &Cursor) -> usize;
@@ -48,6 +90,9 @@ pub struct Cursor {
     /// clusters.
     selection: Option<CharIndex>,
     visual_horizontal_offset: Option<usize>,
+    /// Rectangle selection state. Exclusive with `selection` (D3):
+    /// when `rectangle_selection` is Some, `selection` must be None.
+    rectangle_selection: Option<RectangleSelection>,
 }
 
 impl Default for Cursor {
@@ -62,6 +107,7 @@ impl Cursor {
             range: 0..0,
             selection: None,
             visual_horizontal_offset: None,
+            rectangle_selection: None,
         }
     }
 
@@ -78,6 +124,7 @@ impl Cursor {
             range: text.prev_grapheme_boundary(text.len_chars())..text.len_chars(),
             visual_horizontal_offset: None,
             selection: None,
+            rectangle_selection: None,
         }
     }
 
@@ -136,7 +183,19 @@ impl Cursor {
         self.range = grapheme_start..grapheme_end
     }
 
+    /// Reconcile cursor position against a compound diff (multiple sub-diffs).
+    /// Applies each sub-diff's effect in order. The sub-diffs should be
+    /// provided in the order they were applied to the text (forward order).
+    pub fn reconcile_compound(&mut self, new_text: &Rope, compound: &CompoundDiff) {
+        for diff in &compound.0 {
+            if !diff.is_empty() {
+                self.reconcile(new_text, diff);
+            }
+        }
+    }
+
     pub fn begin_selection(&mut self) {
+        self.rectangle_selection = None;
         self.selection = Some(self.range.start)
     }
 
@@ -147,12 +206,51 @@ impl Cursor {
     pub fn select_all(&mut self, text: &Rope) {
         movement::move_to_start_of_buffer(text, self);
         self.selection = Some(text.len_chars());
+        self.rectangle_selection = None;
+    }
+
+    // Rectangle selection mode
+
+    /// Enter rectangle selection mode. Current cursor position becomes the
+    /// anchor. Clears any existing linear selection (D3: exclusive).
+    pub fn begin_rectangle_selection(&mut self, text: &Rope, tab_width: usize) {
+        self.selection = None;
+        let line = text.char_to_line(self.range.start);
+        let column = self.column_offset(tab_width, text);
+        self.rectangle_selection = Some(RectangleSelection::new(line, column));
+    }
+
+    /// Update rectangle diagonal from current cursor position.
+    /// Should be called after each cursor movement in rectangle mode.
+    pub fn update_rectangle_diagonal(&mut self, text: &Rope, tab_width: usize) {
+        let cursor_line = text.char_to_line(self.range.start);
+        let cursor_column = self.column_offset(tab_width, text);
+        if let Some(ref mut rect) = self.rectangle_selection {
+            rect.update_diagonal(cursor_line, cursor_column);
+        }
+    }
+
+    /// Exit rectangle selection mode without modifying the buffer.
+    /// Cursor position is unchanged (C-g cancel).
+    pub fn clear_rectangle_selection(&mut self) {
+        self.rectangle_selection = None;
+    }
+
+    /// Get the current rectangle selection, if any.
+    pub fn rectangle_selection(&self) -> Option<&RectangleSelection> {
+        self.rectangle_selection.as_ref()
+    }
+
+    /// Whether rectangle mode is active.
+    pub fn is_rectangle_mode(&self) -> bool {
+        self.rectangle_selection.is_some()
     }
 
     // Editing
 
     pub fn insert_char(&mut self, text: &mut Rope, character: char) -> OpaqueDiff {
         self.clear_selection();
+        self.clear_rectangle_selection();
         text.insert_char(self.range.start, character);
         OpaqueDiff::new(
             text.char_to_byte(self.range.start),
@@ -170,6 +268,7 @@ impl Cursor {
         characters: impl IntoIterator<Item = char>,
     ) -> OpaqueDiff {
         self.clear_selection();
+        self.clear_rectangle_selection();
         let mut num_bytes = 0;
         let mut num_chars = 0;
         characters
@@ -383,4 +482,222 @@ Basic Latin
 CJK
     豈 更 車 Ⅷ
 "#;
+
+    // --- Selection regression tests (safety net for C-3) ---
+
+    #[test]
+    fn begin_selection_sets_anchor() {
+        let text = Rope::from("Hello world");
+        let mut cursor = Cursor::new();
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 3);
+        cursor.begin_selection();
+        assert_eq!(cursor.selection, Some(3));
+    }
+
+    #[test]
+    fn clear_selection_removes_anchor() {
+        let text = Rope::from("Hello world");
+        let mut cursor = Cursor::new();
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 3);
+        cursor.begin_selection();
+        assert!(cursor.selection.is_some());
+        cursor.clear_selection();
+        assert!(cursor.selection.is_none());
+    }
+
+    #[test]
+    fn selection_normalized_forward() {
+        let text = Rope::from("Hello world");
+        let mut cursor = Cursor::new();
+        // anchor at 3, cursor moves to 7 => selection = 3..7
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 3);
+        cursor.begin_selection();
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 4);
+        let sel = cursor.selection();
+        assert_eq!(sel, 3..7);
+    }
+
+    #[test]
+    fn selection_normalized_backward() {
+        let text = Rope::from("Hello world");
+        let mut cursor = Cursor::new();
+        // anchor at 7, cursor moves back to 3 => selection = 3..7
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 7);
+        cursor.begin_selection();
+        movement::move_horizontally(&text, &mut cursor, Direction::Backward, 4);
+        let sel = cursor.selection();
+        assert_eq!(sel, 3..7);
+    }
+
+    #[test]
+    fn selection_no_anchor_returns_cursor_range() {
+        let text = Rope::from("Hello world");
+        let mut cursor = Cursor::new();
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 5);
+        assert!(cursor.selection.is_none());
+        let sel = cursor.selection();
+        // Should return cursor's own range
+        assert_eq!(sel, cursor.range);
+    }
+
+    #[test]
+    fn select_all_selects_entire_buffer() {
+        let text = Rope::from("Hello\nWorld");
+        let mut cursor = Cursor::new();
+        cursor.select_all(&text);
+        let sel = cursor.selection();
+        assert_eq!(sel.start, 0);
+        assert_eq!(sel.end, text.len_chars());
+    }
+
+    // --- delete_selection regression tests (safety net for C-3) ---
+
+    #[test]
+    fn delete_selection_removes_selected_range() {
+        let mut text = Rope::from("Hello world");
+        let mut cursor = Cursor::new();
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 3);
+        cursor.begin_selection();
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 4);
+        let operation = cursor.delete_selection(&mut text);
+        assert_eq!(&text.to_string(), "Helorld");
+        assert_eq!(operation.diff.char_index, 3);
+        assert_eq!(operation.diff.old_char_length, 4);
+    }
+
+    #[test]
+    fn delete_selection_resets_cursor() {
+        let mut text = Rope::from("Hello world");
+        let mut cursor = Cursor::new();
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 3);
+        cursor.begin_selection();
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 4);
+        cursor.delete_selection(&mut text);
+        // After delete_selection, cursor is created from min(range.start, text end)
+        // range.start was 7 (diagonal), new text len = 7, so cursor at 6
+        assert_eq!(cursor.range.start, 6);
+        // Selection should be cleared (new cursor has no selection)
+        assert!(cursor.selection.is_none());
+    }
+
+    #[test]
+    fn delete_selection_backward_direction() {
+        let mut text = Rope::from("Hello world");
+        let mut cursor = Cursor::new();
+        // anchor at 7, move back to 3 => selection = 3..7
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 7);
+        cursor.begin_selection();
+        movement::move_horizontally(&text, &mut cursor, Direction::Backward, 4);
+        // cursor.range.start is now 3
+        let operation = cursor.delete_selection(&mut text);
+        assert_eq!(&text.to_string(), "Helorld");
+        // cursor.range.start was 3, min(3, prev_boundary(7)) = 3
+        assert_eq!(cursor.range.start, 3);
+        assert!(cursor.selection.is_none());
+    }
+
+    #[test]
+    fn delete_selection_on_empty_text() {
+        let mut text = Rope::from("");
+        let mut cursor = Cursor::new();
+        let operation = cursor.delete_selection(&mut text);
+        assert!(operation.diff.is_empty());
+    }
+
+    // --- Rectangle selection tests (spec: rectangle-selection) ---
+
+    #[test]
+    fn rectangle_enter_anchor_fixed() {
+        let text = Rope::from("Hello\nWorld\n");
+        let mut cursor = Cursor::new();
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 3);
+        cursor.begin_rectangle_selection(&text, 4);
+        // Anchor should be at (line 0, column 3)
+        let rect = cursor.rectangle_selection().unwrap();
+        assert_eq!(rect.anchor_line, 0);
+        assert_eq!(rect.anchor_column, 3);
+        assert_eq!(rect.line_start, 0);
+        assert_eq!(rect.line_end, 0);
+        assert_eq!(rect.column_left, 3);
+        assert_eq!(rect.column_right, 3);
+        assert!(rect.is_zero_width());
+    }
+
+    #[test]
+    fn rectangle_diagonal_updates_normalized() {
+        let text = Rope::from("Hello\nWorld\nFooBar\n");
+        let mut cursor = Cursor::new();
+        // Start at column 2, line 0
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 2);
+        cursor.begin_rectangle_selection(&text, 4);
+        // Move right 3 columns
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 3);
+        cursor.update_rectangle_diagonal(&text, 4);
+        let rect = cursor.rectangle_selection().unwrap();
+        // Anchor at (0, 2), cursor now at column 5 => normalized: cols 2..5
+        assert_eq!(rect.line_start, 0);
+        assert_eq!(rect.line_end, 0);
+        assert_eq!(rect.column_left, 2);
+        assert_eq!(rect.column_right, 5);
+    }
+
+    #[test]
+    fn rectangle_backward_direction_normalized() {
+        let text = Rope::from("Hello\nWorld\nFooBar\n");
+        let mut cursor = Cursor::new();
+        // Start at column 5, line 0
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 5);
+        cursor.begin_rectangle_selection(&text, 4);
+        // Move left 3 columns
+        movement::move_horizontally(&text, &mut cursor, Direction::Backward, 3);
+        cursor.update_rectangle_diagonal(&text, 4);
+        let rect = cursor.rectangle_selection().unwrap();
+        // Anchor at (0, 5), cursor now at column 2 => normalized: cols 2..5
+        assert_eq!(rect.column_left, 2);
+        assert_eq!(rect.column_right, 5);
+    }
+
+    #[test]
+    fn rectangle_cancel_nondestructive() {
+        let text = Rope::from("Hello world");
+        let mut cursor = Cursor::new();
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 3);
+        let cursor_before = cursor.clone();
+        cursor.begin_rectangle_selection(&text, 4);
+        assert!(cursor.is_rectangle_mode());
+        cursor.clear_rectangle_selection();
+        assert!(!cursor.is_rectangle_mode());
+        // Cursor position unchanged
+        assert_eq!(cursor.range, cursor_before.range);
+    }
+
+    #[test]
+    fn rectangle_exclusive_with_normal_selection() {
+        let text = Rope::from("Hello world");
+        let mut cursor = Cursor::new();
+        // Start normal selection
+        cursor.begin_selection();
+        assert!(cursor.selection.is_some());
+        assert!(!cursor.is_rectangle_mode());
+        // Enter rectangle mode clears normal selection
+        cursor.begin_rectangle_selection(&text, 4);
+        assert!(cursor.selection.is_none());
+        assert!(cursor.is_rectangle_mode());
+        // Enter normal selection clears rectangle mode
+        cursor.begin_selection();
+        assert!(cursor.selection.is_some());
+        assert!(!cursor.is_rectangle_mode());
+    }
+
+    #[test]
+    fn rectangle_mode_buffer_unchanged() {
+        let text = Rope::from("Hello\nWorld\n");
+        let mut cursor = Cursor::new();
+        movement::move_horizontally(&text, &mut cursor, Direction::Forward, 3);
+        cursor.begin_rectangle_selection(&text, 4);
+        movement::move_vertically(&text, &mut cursor, 4, Direction::Forward, 1);
+        cursor.update_rectangle_diagonal(&text, 4);
+        // Buffer should be unchanged (no edits happened)
+        assert_eq!(&text.to_string(), "Hello\nWorld\n");
+    }
 }
