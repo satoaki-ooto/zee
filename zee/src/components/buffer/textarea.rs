@@ -7,11 +7,11 @@ use zi::{
     ShouldRender, Size,
 };
 
-use zee_edit::{ByteIndex, Cursor, LineIndex, RectangleSelection, RopeGraphemes};
+use zee_edit::{ByteIndex, Cursor, LineIndex, RopeGraphemes};
 use zee_grammar::Mode;
 
 use crate::syntax::{
-    highlight::{text_style_at_char_ex, Theme as SyntaxTheme},
+    highlight::{text_style_at_char_ex, RectangleHighlight, RenderFlags, Theme as SyntaxTheme},
     parse::ParseTree,
 };
 
@@ -176,8 +176,15 @@ impl TextArea {
                 }
             },
         );
-        let rect_visual_range = rect_state.map(|(l, r, _)| (l, r));
-        let is_zero_width_rect = rect_state.map(|(_, _, zw)| zw);
+        let rect = RectangleHighlight {
+            visual_range: rect_state.map(|(l, r, _)| (l, r)),
+            visual_x,
+            is_zero_width: rect_state.map(|(_, _, zw)| zw),
+        };
+        let flags = RenderFlags {
+            focused,
+            line_under_cursor,
+        };
 
         for grapheme in RopeGraphemes::new(&line.slice(..)) {
             let is_error = false;
@@ -187,13 +194,10 @@ impl TextArea {
                 theme,
                 cursor,
                 char_index,
-                focused,
-                line_under_cursor,
+                flags,
                 scope,
                 is_error,
-                rect_visual_range,
-                visual_x,
-                is_zero_width_rect,
+                &rect,
             );
             let grapheme_width =
                 zee_edit::graphemes::width(self.properties.mode.indentation.tab_width(), &grapheme);
