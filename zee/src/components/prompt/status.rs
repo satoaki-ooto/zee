@@ -1,4 +1,5 @@
-use palette::{Gradient, Hsv, LinSrgb};
+use palette::convert::FromColorUnclamped;
+use palette::{Hsv, Srgb, Mix};
 use std::borrow::Cow;
 use zi::{
     components::text::{Text, TextProperties},
@@ -15,7 +16,7 @@ pub struct StatusProperties {
 pub struct Status {
     properties: StatusProperties,
     animation_offset: f32,
-    gradient: Gradient<Hsv>,
+    endpoints: [Hsv; 2],
 }
 
 impl Component for Status {
@@ -24,7 +25,7 @@ impl Component for Status {
 
     fn create(properties: Self::Properties, _frame: Rect, _link: ComponentLink<Self>) -> Self {
         Self {
-            gradient: gradient_from_style(properties.style),
+            endpoints: endpoints_from_style(properties.style),
             properties,
             animation_offset: 1.0,
         }
@@ -32,7 +33,7 @@ impl Component for Status {
 
     fn change(&mut self, properties: Self::Properties) -> ShouldRender {
         if self.properties != properties {
-            self.gradient = gradient_from_style(properties.style);
+            self.endpoints = endpoints_from_style(properties.style);
             if self.properties.pending != properties.pending {
                 self.animation_offset = 1.0;
             }
@@ -81,33 +82,35 @@ impl Component for Status {
     }
 }
 
-fn gradient_from_style(style: Style) -> Gradient<Hsv> {
-    Gradient::new(vec![
-        Hsv::from(
-            LinSrgb::new(
+fn endpoints_from_style(style: Style) -> [Hsv; 2] {
+    [
+        Hsv::from_color_unclamped(
+            Srgb::new(
                 style.background.red,
                 style.background.green,
                 style.background.blue,
             )
             .into_format::<f32>(),
         ),
-        Hsv::from(
-            LinSrgb::new(
+        Hsv::from_color_unclamped(
+            Srgb::new(
                 style.foreground.red,
                 style.foreground.green,
                 style.foreground.blue,
             )
             .into_format::<f32>(),
         ),
-    ])
+    ]
 }
 
 impl Status {
     fn animated_style(&self) -> Style {
-        let background = LinSrgb::from(self.gradient.get((self.animation_offset - 1.0).abs()))
-            .into_format::<u8>();
+        let t = (self.animation_offset - 1.0).abs();
+        let background =
+            Srgb::from_color_unclamped(self.endpoints[0].mix(self.endpoints[1], t))
+                .into_format::<u8>();
         let foreground =
-            LinSrgb::from(self.gradient.get(1.0 - (self.animation_offset - 1.0).abs()))
+            Srgb::from_color_unclamped(self.endpoints[0].mix(self.endpoints[1], 1.0 - t))
                 .into_format::<u8>();
 
         Style::normal(
