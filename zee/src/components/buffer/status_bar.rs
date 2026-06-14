@@ -188,7 +188,7 @@ impl Component for StatusBar {
                         .as_ref()
                         .and_then(|repo| repo.head().ok())
                         .as_ref()
-                        .and_then(|reference| reference.shorthand())
+                        .and_then(|reference| reference.shorthand().ok())
                     {
                         Some(reference) => format!("{}  ", reference),
                         None => String::new(),
